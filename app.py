@@ -1,59 +1,86 @@
 """
-AI Newsletter Generator - Streamlit App
-Built using LangChain Agent (Tool Calling) + Gemini + Tavily
+AI Newsletter Generator
+LangChain Agent + Gemini + Tavily + Streamlit
 """
 
-import datetime
-import streamlit as st
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.agents import create_agent
-from tavily import TavilyClient
+# ============================================================
+# STREAMLIT CONFIGURATION
+# ============================================================
 
-# To show web-app: complete page layout
-st.set_page_config(layout="wide")
+st.set_page_config(
+    page_title="AI Newsletter Generator",
+    layout="wide"
+)
 
-# To give title
 st.title("AI NEWSLETTER GENERATOR")
 
-st.write("""This app helps you build a curated, styled HTML newsletter
-from this week's top trending news using a LangChain agent.""")
+st.write(
+    "Build a curated, styled HTML newsletter from this week's "
+    "top trending news using a LangChain agent."
+)
 
-st.sidebar.title("Fill Important Details")
 
-# ============ API KEYS ===================
-TAVILY_API_KEY = st.sidebar.text_input("Tavily-API", type="password")
-GOOGLE_API_KEY = st.sidebar.text_input("Gemini-API", type="password")
+# ============================================================
+# SIDEBAR / API KEYS
+# ============================================================
 
-all_API = [TAVILY_API_KEY, GOOGLE_API_KEY]
+st.sidebar.title("Newsletter Settings")
 
-if not all(all_API):
-    st.error("Must give API keys")
+TAVILY_API_KEY = st.sidebar.text_input(
+    "Tavily API Key",
+    type="password"
+)
+
+GOOGLE_API_KEY = st.sidebar.text_input(
+    "Gemini API Key",
+    type="password"
+)
+
+if not TAVILY_API_KEY or not GOOGLE_API_KEY:
+    st.info("Enter both API keys in the sidebar to continue.")
     st.stop()
-elif all(all_API):
-    st.success("API KEYS LOADED SUCCESSFULLY")
-    # =========== MODEL CREATION ==============
-    model = ChatGoogleGenerativeAI(
-        model='gemini-3.5-flash-lite',
-        google_api_key=GOOGLE_API_KEY
-    )
-else:
-    st.info("PASS ALL API-KEYS")
 
-max_results = 8
-# ==================GET USER INFO=====================
+st.success("API keys loaded successfully.")
+
+
+# ============================================================
+# MODEL
+# ============================================================
+
+model = ChatGoogleGenerativeAI(
+    model="gemini-3.5-flash-lite",
+    google_api_key=GOOGLE_API_KEY
+)
+
+
+# ============================================================
+# NEWSLETTER SETTINGS
+# ============================================================
+
+MAX_RESULTS = 8
+
 st.markdown("### NEWSLETTER DETAILS")
-newsletter_title = st.text_input("Newsletter Title", value="Weekly Digest")
+
+newsletter_title = st.text_input(
+    "Newsletter Title",
+    value="Weekly Digest"
+)
 
 
-# =========== TOOL 1 ======================
-def weekly_article_collector(max_results=8):
-    """This function searches the web for the top trending news
-    headlines published in the current week using the Tavily search
-    API. Returns article metadata: title, url, content and
-    published date."""
+# ============================================================
+# TOOL 1 — COLLECT NEWS
+# ============================================================
+
+def weekly_article_collector(max_results=MAX_RESULTS):
+    """
+    Search for the top trending news stories of the current week.
+    Returns article title, URL, content and publication date.
+    """
 
     query = "top trending world news headlines this week"
+
     client = TavilyClient(api_key=TAVILY_API_KEY)
+
     response = client.search(
         query=query,
         topic="news",
@@ -63,206 +90,478 @@ def weekly_article_collector(max_results=8):
     )
 
     articles = []
+
     for result in response.get("results", []):
         articles.append({
             "title": result.get("title"),
             "url": result.get("url"),
             "content": result.get("content"),
-            "published_date": result.get("published_date", "N/A"),
+            "published_date": result.get(
+                "published_date",
+                "N/A"
+            ),
         })
+
     return articles
 
 
-# =========== TOOL 2 ======================
-def article_summarizer(article_text, article_title="Untitled"):
-    """This function takes article text or url content and
-    produces a concise summary, key points, category
-    and relevance score (out of 10) using LLM,
-    given article title and content"""
+# ============================================================
+# TOOL 2 — SUMMARIZE ARTICLE
+# ============================================================
 
-    prompt = f"""You are a professional newsletter editor.
-    Summarize the article below in 3-4 concise lines,
-    then list 2-3 key points as bullets, assign a single
-    category (Tech/Business/Science/World/Other) and give
-    a relevance score out of 10 for a general tech audience.
-
-    Article Title: {article_title}
-    Article Content: {article_text}
-
-    Give output strictly in this format:
-    Summary: <summary>
-    Key Points: <point1>; <point2>; <point3>
-    Category: <category>
-    Relevance: <score>/10
+def article_summarizer(
+    article_text,
+    article_title="Untitled"
+):
+    """
+    Summarize an article and return:
+    summary, key points, category and relevance score.
     """
 
+    prompt = f"""
+You are a professional newsletter editor.
+
+Summarize the article below in 3-4 concise lines.
+Then provide 2-3 key points, assign one category, and
+give a relevance score out of 10 for a general audience.
+
+Article Title:
+{article_title}
+
+Article Content:
+{article_text}
+
+Return ONLY this format:
+
+Summary: <summary>
+Key Points: <point1>; <point2>; <point3>
+Category: <category>
+Relevance: <score>/10
+"""
+
     response = model.invoke(prompt)
+
     return _extract_text(response)
 
 
-# =========== TOOL 3 ======================
-def newsletter_html_generator(curated_summaries, newsletter_title="Weekly Newsletter"):
-    """This function converts curated article summaries
-    into a styled html newsletter template suitable
-    for email or web publishing, given curated summaries
-    text and newsletter title"""
+# ============================================================
+# TOOL 3 — GENERATE NEWSLETTER HTML
+# ============================================================
 
-    current_date = datetime.datetime.now().strftime("%d %B %Y")
-
-    prompt = f"""Convert the curated article summaries below into a single
-    self-contained HTML page styled like a printed magazine/school
-    newsletter front page. Return a full HTML document with a <style>
-    block in the <head> (CSS does not need to be inline), max content
-    width around 900px, centered on the page with a soft off-white
-    background inside a bordered page frame.
-
-    CRITICAL - TEXT MUST ALWAYS BE VISIBLE:
-    - Every single text element (body, headings, paragraphs, links, list
-      items, spans) MUST have an explicit CSS `color` property with a
-      concrete hex/rgb value (e.g. color: #1a1a1a). NEVER leave color
-      unset, and never rely on "inherit" or "currentColor".
-    - Every colored box, banner, or section background MUST have an
-      explicit `background-color` AND an explicit `color` on the text
-      inside it, chosen so there is strong contrast (e.g. dark text on
-      light backgrounds, or white text on dark backgrounds). Never pair
-      a light background with unset/light text or a dark background with
-      unset/dark text.
-    - Set `color` and `background-color` explicitly on the <body> and
-      <html> tags too, so nothing depends on browser or host-page
-      defaults.
-
-    Do NOT include any <img> tags, background-image styles, or image
-    urls anywhere in the output - text and colored boxes only, no photos.
-
-    Follow this exact structure and style:
-    - Top-left corner: a small bordered box showing the exact text
-      "{current_date}" as the generation/publish date.
-    - Masthead: one huge bold centered title showing
-      "{newsletter_title}" (60-90px, wide letter-spacing, like a
-      newspaper nameplate).
-    - Sub-banner: a full-width colored horizontal band directly below
-      the masthead with small bold centered uppercase tagline text
-      summarizing that this covers this week's top stories across
-      any topic/category (do not hardcode a single subject like "AI"
-      in the tagline - infer a short general tagline from the actual
-      mix of categories present in the curated summaries below).
-    - Below the banner, use a CSS grid with exactly 2 columns
-      (display: grid; grid-template-columns: 1fr 1fr; column-gap and
-      row-gap around 24px) to lay out one section per curated article.
-      Do NOT create a single "top story" block - turn every curated
-      article into its own section: a bold uppercase heading (short,
-      based on the article's own title/category) followed by a
-      paragraph using that article's summary and key points as body
-      text, spanning whatever categories the curated summaries
-      actually cover (world news, tech, business, science, etc).
-    - CRITICAL - no empty or blank cells: count the curated articles
-      first. If the count is odd, make the LAST article's section span
-      both columns (grid-column: 1 / -1) instead of leaving an empty
-      cell next to it. Never render an empty box, an empty <div>, or a
-      solid-colored block with no text in it anywhere on the page -
-      every colored box must contain real content from the curated
-      summaries. If there are not enough curated summaries to fill a
-      section you were going to add, simply omit that section instead
-      of leaving it blank.
-    - For 2-3 of the sections, add a short colored accent line
-      (in a highlight color) above the paragraph showing that article's
-      own category or relevance score.
-    - At the bottom of each column, add one pale colored info box
-      (light blue/light pink) containing that source article's category
-      and a bold "Read More" link pointing to the real article url -
-      only add this info box if there is a real article category and
-      url to put inside it, never as an empty filler box.
-      Use the real curated article titles, summaries, categories and
-      urls throughout - never placeholder/lorem ipsum text.
-    - Footer: a full-width colored strip at the very bottom with small
-      bold centered white text reading something like "Compiled
-      automatically by a multi-agent AI pipeline | Generated on
-      {current_date}".
-    Give final response strictly in HTML only, no markdown, no code fences.
-
-    Newsletter Title: {newsletter_title}
-    Generated On: {current_date}
-    Curated Summaries (multiple topics/categories from this week): {curated_summaries}
+def newsletter_html_generator(
+    curated_summaries,
+    newsletter_title="Weekly Newsletter"
+):
+    """
+    Convert curated article summaries into a complete,
+    self-contained HTML newsletter.
     """
 
-    response = model.invoke(prompt)
-    return _extract_text(response)
+    current_date = datetime.datetime.now().strftime(
+        "%d %B %Y"
+    )
 
+    prompt = f"""
+Convert the curated article summaries below into a single
+self-contained HTML newsletter.
+
+Return a COMPLETE HTML document containing:
+<html>, <head>, <style>, <body>.
+
+GENERAL DESIGN:
+- Printed magazine/newspaper newsletter appearance.
+- Maximum content width around 900px.
+- Centered page.
+- Soft off-white background.
+- Bordered page frame.
+- Text-only design.
+- Do NOT use images.
+
+============================================================
+CRITICAL TEXT VISIBILITY
+============================================================
+
+Every text element must have an explicit readable CSS color.
+
+Set explicit color values on:
+- html
+- body
+- headings
+- paragraphs
+- links
+- spans
+- list items
+- metadata
+
+Never rely on:
+- inherit
+- currentColor
+- browser defaults
+
+Every colored background must also have an explicit
+text color with strong contrast.
+
+============================================================
+HEADER
+============================================================
+
+1. Top-left:
+   Small bordered box containing exactly:
+   "{current_date}"
+
+2. Masthead:
+   Large, bold, centered newsletter title:
+   "{newsletter_title}"
+
+3. Sub-banner:
+   Full-width colored horizontal band below the masthead.
+
+   Use a short uppercase tagline describing this week's
+   collection of news.
+
+   Do NOT assume the newsletter is only about AI or technology.
+
+============================================================
+ARTICLE GRID — VERY IMPORTANT
+============================================================
+
+Create exactly ONE grid container:
+
+.news-grid {{
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+}}
+
+Every article MUST be contained inside exactly ONE:
+
+<div class="article-card">
+
+The following MUST remain INSIDE the same article-card:
+- category
+- article heading
+- summary
+- key points
+- accent line
+- relevance information
+- Read More link
+- source/category info box
+
+NEVER create a separate grid item for:
+- Read More
+- category
+- metadata
+- accent line
+- source information
+- an empty div
+- a filler box
+
+============================================================
+ODD / EVEN ARTICLE COUNTS
+============================================================
+
+This is critical.
+
+Use this CSS:
+
+.article-card:last-child:nth-child(odd) {{
+    grid-column: 1 / -1;
+}}
+
+This means:
+
+8 articles → normal 2-column grid
+7 articles → last article spans both columns
+6 articles → normal 2-column grid
+5 articles → last article spans both columns
+4 articles → normal 2-column grid
+
+NEVER intentionally create an empty grid cell.
+
+NEVER add a blank article or placeholder just to balance
+the grid.
+
+Do not manually add unnecessary grid-column rules to
+individual articles.
+
+============================================================
+ARTICLE CONTENT
+============================================================
+
+Every curated article becomes its own article-card.
+
+Each card should contain:
+
+- Bold uppercase heading
+- Article summary
+- 2-3 key points where appropriate
+- Category
+- Relevance score where appropriate
+- Real article URL
+- Bold "Read More" link
+
+Use the real data from the curated summaries.
+
+Never use:
+- lorem ipsum
+- placeholder articles
+- fake URLs
+- empty sections
+
+For 2-3 articles, add a short colored accent line above
+the article content.
+
+============================================================
+ARTICLE INFO BOX
+============================================================
+
+Inside each article-card, add a pale colored info box
+containing:
+
+Category: <category> | Read More
+
+The Read More link MUST point to the actual article URL.
+
+Only create this box when both category and URL are valid.
+
+The info box MUST NOT become its own grid item.
+
+============================================================
+FOOTER
+============================================================
+
+At the bottom create a full-width colored footer.
+
+Use small, bold, centered white text similar to:
+
+Compiled automatically by a multi-agent AI pipeline |
+Generated on {current_date}
+
+============================================================
+HTML OUTPUT RULE
+============================================================
+
+Return ONLY HTML.
+
+Do not return:
+- Markdown
+- Code fences
+- Explanations
+- ```html
+- ``` 
+
+Newsletter Title:
+{newsletter_title}
+
+Generated On:
+{current_date}
+
+Curated Summaries:
+{curated_summaries}
+"""
+
+    response = model.invoke(prompt)
+
+    html = _extract_text(response)
+
+    return _clean_html_output(html)
+
+
+# ============================================================
+# HELPER — EXTRACT MODEL TEXT
+# ============================================================
 
 def _extract_text(response):
-    """Safely extract text from a LangChain chat model response, regardless
-    of whether .content is a plain string or a list of content blocks."""
+    """
+    Safely extract text from a LangChain model response.
+    """
+
     content = response.content
+
     if isinstance(content, str):
         return content
-    if isinstance(content, list) and content:
-        last = content[-1]
-        if isinstance(last, dict) and "text" in last:
-            return last["text"]
-        return str(last)
+
+    if isinstance(content, list):
+        text_parts = []
+
+        for block in content:
+            if isinstance(block, dict) and "text" in block:
+                text_parts.append(block["text"])
+            else:
+                text_parts.append(str(block))
+
+        return "".join(text_parts)
+
     return str(content)
 
 
-# ========== Agent Creation ================
+# ============================================================
+# HELPER — CLEAN GENERATED HTML
+# ============================================================
+
+def _clean_html_output(html):
+    """
+    Remove accidental Markdown code fences and surrounding
+    whitespace from the model-generated HTML.
+    """
+
+    html = html.strip()
+
+    if html.startswith("```html"):
+        html = html[len("```html"):].strip()
+
+    elif html.startswith("```HTML"):
+        html = html[len("```HTML"):].strip()
+
+    if html.endswith("```"):
+        html = html[:-3].strip()
+
+    return html
+
+
+# ============================================================
+# AGENT
+# ============================================================
+
 agent = create_agent(
     model=model,
-    tools=[weekly_article_collector, article_summarizer, newsletter_html_generator]
+    tools=[
+        weekly_article_collector,
+        article_summarizer,
+        newsletter_html_generator
+    ]
 )
 
 
-# ============== MAIN AGENT ===============
-def main_agent(agent, query):
-    """This is the main agent, or leader agent,
-    orchestrates the full newsletter workflow"""
+# ============================================================
+# MAIN AGENT
+# ============================================================
 
-    prompt = """Your task is to orchestrate the full newsletter workflow
-    based on the instructions given below:
-    1. Call the weekly_article_collector tool with max_results as given,
-       to fetch general top trending news headlines across ANY subject
-       for the week.
-    2. Call the article_summarizer tool separately on EACH collected
-       article to get its summary, key points, category and relevance
-       score.
-    3. 3. Keep the best EXACTLY 8 curated articles whenever 8 are available.
-    4. Combine all the remaining curated summaries (title, summary,
-       key points, category, url for each) into one collection, then
-       call the newsletter_html_generator tool once with that full
-       collection so all curated topics appear in the final newsletter.
-    Give the final response output strictly in HTML, no markdowns,
-    no code fences, no explanation text before or after the HTML.
-    Instructions given below:
+def main_agent(agent, query):
+    """
+    Orchestrate the complete newsletter workflow.
     """
 
-    prompt = prompt + query
+    prompt = f"""
+Your task is to create the complete weekly newsletter.
 
-    response = agent.invoke({"messages": [{'role': 'user', 'content': prompt}]})
-    code = _extract_text(response['messages'][-1])
-    return code
+Follow these steps in order:
+
+1. Call weekly_article_collector with:
+   max_results={MAX_RESULTS}
+
+2. Call article_summarizer separately for EACH collected article.
+
+3. Select the best EXACTLY {MAX_RESULTS} articles whenever
+   {MAX_RESULTS} or more valid articles are available.
+
+4. Preserve each selected article's:
+   - title
+   - summary
+   - key points
+   - category
+   - relevance score
+   - URL
+
+5. Combine the selected article information into ONE collection.
+
+6. Call newsletter_html_generator EXACTLY ONCE with the
+   complete collection.
+
+7. Return ONLY the final HTML newsletter.
+
+Do NOT return:
+- Markdown
+- code fences
+- explanations
+- commentary before or after the HTML
+
+User request:
+{query}
+"""
+
+    response = agent.invoke({
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ]
+    })
+
+    final_message = response["messages"][-1]
+
+    return _clean_html_output(
+        _extract_text(final_message)
+    )
 
 
-# ========== CALLING MAIN AGENT ===============
-if st.button("Generate Newsletter"):
-    with st.spinner("Agent Running"):
-        user_query = (
-            f"Create this week's newsletter covering the top trending "
-            f"news stories of the week across any topic/category "
-            f"(do not restrict to a single subject)."
-            + f"\nUse max_results={max_results} when collecting articles."
-            + f"\nNewsletter Title: {newsletter_title}"
-        )
+# ============================================================
+# STREAMLIT APPLICATION
+# ============================================================
 
-        raw_code = main_agent(agent, user_query)
-        code = raw_code.replace("```html", "").replace("```", "").strip()
+if st.button(
+    "Generate Newsletter",
+    type="primary"
+):
 
-        st.success("Newsletter generated!")
+    try:
+
+        with st.spinner(
+            "Collecting news and generating newsletter..."
+        ):
+
+            user_query = (
+                "Create this week's newsletter covering "
+                "the top trending news stories across "
+                "any topic/category. "
+                f"Use max_results={MAX_RESULTS}. "
+                f"Newsletter Title: {newsletter_title}"
+            )
+
+            code = main_agent(
+                agent,
+                user_query
+            )
+
+        if not code or "<html" not in code.lower():
+            st.error(
+                "The generated response does not appear "
+                "to contain valid HTML."
+            )
+            st.stop()
+
+        st.success("Newsletter generated successfully!")
+
+        # ----------------------------------------------------
+        # DOWNLOAD
+        # ----------------------------------------------------
 
         st.download_button(
-            "Download newsletter.html",
+            label="Download newsletter.html",
             data=code,
             file_name="newsletter.html",
-            mime="text/html",
+            mime="text/html"
         )
 
+        # ----------------------------------------------------
+        # PREVIEW
+        # ----------------------------------------------------
+
         st.divider()
+
         st.subheader("Preview")
-        st.components.v1.html(code, height=900, scrolling=True)
+
+        st.components.v1.html(
+            code,
+            height=900,
+            scrolling=True
+        )
+
+    except Exception as e:
+
+        st.error(
+            "An error occurred while generating the newsletter."
+        )
+
+        st.exception(e)
