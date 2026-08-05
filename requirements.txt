@@ -2,3 +2,5 @@ streamlit
 langchain
 langchain-google-genai
 tavily-python
+datetime
+langchain.agents
