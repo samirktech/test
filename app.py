@@ -3,6 +3,13 @@ AI Newsletter Generator
 LangChain Agent + Gemini + Tavily + Streamlit
 """
 
+import datetime
+import streamlit as st
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain.agents import create_agent
+from tavily import TavilyClient
+
+
 # ============================================================
 # STREAMLIT CONFIGURATION
 # ============================================================
