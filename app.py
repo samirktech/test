@@ -29,55 +29,48 @@ all_API = [TAVILY_API_KEY, GOOGLE_API_KEY]
 if not all(all_API):
     st.error("Must give API keys")
     st.stop()
-
-st.success("API KEYS LOADED SUCCESSFULLY")
-
-# =========== MODEL CREATION ==============
-model = ChatGoogleGenerativeAI(
-    model='gemini-3.5-flash-lite',
-    google_api_key=GOOGLE_API_KEY
-)
+elif all(all_API):
+    st.success("API KEYS LOADED SUCCESSFULLY")
+    # =========== MODEL CREATION ==============
+    model = ChatGoogleGenerativeAI(
+        model='gemini-3.5-flash-lite',
+        google_api_key=GOOGLE_API_KEY
+    )
+else:
+    st.info("PASS ALL API-KEYS")
 
 max_results = 5
-
 # ==================GET USER INFO=====================
 st.markdown("### NEWSLETTER DETAILS")
-
-newsletter_title = st.text_input(
-    "Newsletter Title",
-    value="Weekly Digest"
+newsletter_title = st.text_input("Newsletter Title", value="Weekly Digest")
+country_input = st.text_area(
+    "Country / Region Focus",
+    value="World",
+    height=68,
+    help='Type a specific country (e.g. "India", "Japan") to get news '
+         'only from that country. Type "World" (or leave as-is) to get '
+         'top trending news from all over the world.'
 )
 
-# ================= NEW: REGION SELECTOR =================
-news_scope = st.selectbox(
-    "Select News Region",
-    [
-        "Whole World",
-        "India",
-        "China",
-        "America",
-        "Britain",
-        "France"
-    ]
-)
 
 # =========== TOOL 1 ======================
-def weekly_article_collector(region="Whole World", max_results=5):
-    """Collect top trending news for selected region."""
+def weekly_article_collector(max_results=5, country="World"):
+    """This function searches the web for the top trending news
+    headlines published in the current week using the Tavily search
+    API. If country is "World" (or empty/not specified), it fetches
+    general top trending news from all over the world. If a specific
+    country name is given (e.g. "India", "Japan"), it fetches top
+    trending news headlines only from/about that country. Returns
+    article metadata: title, url, content and published date."""
 
-    query_map = {
-        "Whole World": "top trending world news headlines this week",
-        "India": "top trending India news headlines this week",
-        "China": "top trending China news headlines this week",
-        "America": "top trending United States news headlines this week",
-        "Britain": "top trending United Kingdom news headlines this week",
-        "France": "top trending France news headlines this week",
-    }
+    country = (country or "World").strip()
 
-    query = query_map.get(region, query_map["Whole World"])
+    if country.lower() in ("", "world", "global", "all", "any"):
+        query = "top trending world news headlines this week"
+    else:
+        query = f"top trending news headlines this week in {country}"
 
     client = TavilyClient(api_key=TAVILY_API_KEY)
-
     response = client.search(
         query=query,
         topic="news",
@@ -87,7 +80,6 @@ def weekly_article_collector(region="Whole World", max_results=5):
     )
 
     articles = []
-
     for result in response.get("results", []):
         articles.append({
             "title": result.get("title"),
@@ -95,19 +87,21 @@ def weekly_article_collector(region="Whole World", max_results=5):
             "content": result.get("content"),
             "published_date": result.get("published_date", "N/A"),
         })
-
     return articles
 
 
 # =========== TOOL 2 ======================
 def article_summarizer(article_text, article_title="Untitled"):
-    """Summarize article using Gemini."""
+    """This function takes article text or url content and
+    produces a concise summary, key points, category
+    and relevance score (out of 10) using LLM,
+    given article title and content"""
 
     prompt = f"""You are a professional newsletter editor.
     Summarize the article below in 3-4 concise lines,
     then list 2-3 key points as bullets, assign a single
     category (Tech/Business/Science/World/Other) and give
-    a relevance score out of 10 for a general audience.
+    a relevance score out of 10 for a general tech audience.
 
     Article Title: {article_title}
     Article Content: {article_text}
@@ -124,22 +118,88 @@ def article_summarizer(article_text, article_title="Untitled"):
 
 
 # =========== TOOL 3 ======================
-# KEEPING THIS EXACTLY SAME AS YOUR ORIGINAL CODE
 def newsletter_html_generator(curated_summaries, newsletter_title="Weekly Newsletter"):
-    """Generate HTML newsletter."""
+    """This function converts curated article summaries
+    into a styled html newsletter template suitable
+    for email or web publishing, given curated summaries
+    text and newsletter title"""
 
     current_date = datetime.datetime.now().strftime("%d %B %Y")
 
-    prompt = f"""
-    Create a clean professional HTML newsletter.
+    prompt = f"""Convert the curated article summaries below into a single
+    self-contained HTML page styled like a printed magazine/school
+    newsletter front page. Return a full HTML document with a <style>
+    block in the <head> (CSS does not need to be inline), max content
+    width around 900px, centered on the page with a soft off-white
+    background inside a bordered page frame.
+
+    CRITICAL - TEXT MUST ALWAYS BE VISIBLE:
+    - Every single text element (body, headings, paragraphs, links, list
+      items, spans) MUST have an explicit CSS `color` property with a
+      concrete hex/rgb value (e.g. color: #1a1a1a). NEVER leave color
+      unset, and never rely on "inherit" or "currentColor".
+    - Every colored box, banner, or section background MUST have an
+      explicit `background-color` AND an explicit `color` on the text
+      inside it, chosen so there is strong contrast (e.g. dark text on
+      light backgrounds, or white text on dark backgrounds). Never pair
+      a light background with unset/light text or a dark background with
+      unset/dark text.
+    - Set `color` and `background-color` explicitly on the <body> and
+      <html> tags too, so nothing depends on browser or host-page
+      defaults.
+
+    Do NOT include any <img> tags, background-image styles, or image
+    urls anywhere in the output - text and colored boxes only, no photos.
+
+    Follow this exact structure and style:
+    - Top-left corner: a small bordered box showing the exact text
+      "{current_date}" as the generation/publish date.
+    - Masthead: one huge bold centered title showing
+      "{newsletter_title}" (60-90px, wide letter-spacing, like a
+      newspaper nameplate).
+    - Sub-banner: a full-width colored horizontal band directly below
+      the masthead with small bold centered uppercase tagline text
+      summarizing that this covers this week's top stories across
+      any topic/category (do not hardcode a single subject like "AI"
+      in the tagline - infer a short general tagline from the actual
+      mix of categories present in the curated summaries below).
+    - Below the banner, use a CSS grid with exactly 2 columns
+      (display: grid; grid-template-columns: 1fr 1fr; column-gap and
+      row-gap around 24px) to lay out one section per curated article.
+      Do NOT create a single "top story" block - turn every curated
+      article into its own section: a bold uppercase heading (short,
+      based on the article's own title/category) followed by a
+      paragraph using that article's summary and key points as body
+      text, spanning whatever categories the curated summaries
+      actually cover (world news, tech, business, science, etc).
+    - CRITICAL - no empty or blank cells: count the curated articles
+      first. If the count is odd, make the LAST article's section span
+      both columns (grid-column: 1 / -1) instead of leaving an empty
+      cell next to it. Never render an empty box, an empty <div>, or a
+      solid-colored block with no text in it anywhere on the page -
+      every colored box must contain real content from the curated
+      summaries. If there are not enough curated summaries to fill a
+      section you were going to add, simply omit that section instead
+      of leaving it blank.
+    - For 2-3 of the sections, add a short colored accent line
+      (in a highlight color) above the paragraph showing that article's
+      own category or relevance score.
+    - At the bottom of each column, add one pale colored info box
+      (light blue/light pink) containing that source article's category
+      and a bold "Read More" link pointing to the real article url -
+      only add this info box if there is a real article category and
+      url to put inside it, never as an empty filler box.
+      Use the real curated article titles, summaries, categories and
+      urls throughout - never placeholder/lorem ipsum text.
+    - Footer: a full-width colored strip at the very bottom with small
+      bold centered white text reading something like "Compiled
+      automatically by a multi-agent AI pipeline | Generated on
+      {current_date}".
+    Give final response strictly in HTML only, no markdown, no code fences.
 
     Newsletter Title: {newsletter_title}
     Generated On: {current_date}
-
-    Curated Summaries:
-    {curated_summaries}
-
-    Return only valid HTML.
+    Curated Summaries (multiple topics/categories from this week): {curated_summaries}
     """
 
     response = model.invoke(prompt)
@@ -147,6 +207,8 @@ def newsletter_html_generator(curated_summaries, newsletter_title="Weekly Newsle
 
 
 def _extract_text(response):
+    """Safely extract text from a LangChain chat model response, regardless
+    of whether .content is a plain string or a list of content blocks."""
     content = response.content
     if isinstance(content, str):
         return content
@@ -167,46 +229,69 @@ agent = create_agent(
 
 # ============== MAIN AGENT ===============
 def main_agent(agent, query):
+    """This is the main agent, or leader agent,
+    orchestrates the full newsletter workflow"""
 
-    prompt = """Your task is to orchestrate the full newsletter workflow:
-    1. Collect weekly articles for the selected region/country.
-    2. Summarize each article.
-    3. Keep best 5 articles.
-    4. Generate one HTML newsletter from all curated summaries.
-    Return only HTML.
+    prompt = """Your task is to orchestrate the full newsletter workflow
+    based on the instructions given below:
+    1. Call the weekly_article_collector tool with max_results as given,
+       AND with the country parameter exactly as given below, to fetch
+       top trending news headlines across ANY subject for the week.
+       - If the country given is "World" (or means the whole world/global),
+         pass country="World" so it fetches general worldwide news.
+       - If a specific country name is given (e.g. "India", "Japan"),
+         pass that exact country name so it fetches news only from/about
+         that country. Do NOT mix in news from other countries in that case.
+    2. Call the article_summarizer tool separately on EACH collected
+       article to get its summary, key points, category and relevance
+       score.
+    3. 3. Keep the best EXACTLY 5 curated articles whenever 5 are available.
+    4. Combine all the remaining curated summaries (title, summary,
+       key points, category, url for each) into one collection, then
+       call the newsletter_html_generator tool once with that full
+       collection so all curated topics appear in the final newsletter.
+    Give the final response output strictly in HTML, no markdowns,
+    no code fences, no explanation text before or after the HTML.
+    Instructions given below:
     """
 
-    response = agent.invoke(
-        {"messages": [{'role': 'user', 'content': prompt + query}]}
-    )
+    prompt = prompt + query
 
-    return _extract_text(response['messages'][-1])
+    response = agent.invoke({"messages": [{'role': 'user', 'content': prompt}]})
+    code = _extract_text(response['messages'][-1])
+    return code
 
 
-# ==========================================================
-# NEWSLETTER GENERATOR
-# ==========================================================
-st.divider()
-st.subheader("📰 AI Newsletter Generator")
-
-# KEEPING BUTTON NAME SAME
+# ========== CALLING MAIN AGENT ===============
 if st.button("Generate Newsletter"):
+    with st.spinner("Agent Running"):
+        selected_country = (country_input or "World").strip() or "World"
 
-    with st.spinner("Agent Running..."):
+        if selected_country.lower() in ("world", "global", "all", "any"):
+            scope_instruction = (
+                "Cover the top trending news stories of the week from "
+                "ALL OVER THE WORLD, across any topic/category "
+                "(do not restrict to a single subject or a single country)."
+            )
+        else:
+            scope_instruction = (
+                f"Cover ONLY the top trending news stories of the week "
+                f"from/about the country: {selected_country}. Do not "
+                f"include news from other countries."
+            )
 
-        # NEW: pass selected region into the query
         user_query = (
-            f"Create this week's newsletter covering the top trending "
-            f"news stories for: {news_scope}. "
-            f"If Whole World is selected, include global news."
-            + f"\nUse max_results={max_results}."
+            f"Create this week's newsletter. {scope_instruction}"
+            + f"\nUse max_results={max_results} when collecting articles."
+            + f"\nUse country=\"{selected_country}\" when calling the "
+              f"weekly_article_collector tool."
             + f"\nNewsletter Title: {newsletter_title}"
         )
 
         raw_code = main_agent(agent, user_query)
         code = raw_code.replace("```html", "").replace("```", "").strip()
 
-        st.success(f"Newsletter generated for {news_scope}!")
+        st.success("Newsletter generated!")
 
         st.download_button(
             "Download newsletter.html",
