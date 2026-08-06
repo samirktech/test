@@ -40,12 +40,14 @@ else:
     st.info("PASS ALL API-KEYS")
 
 max_results = 5
+collector_pool_size = 10  # fetch a larger pool so exactly 5 curated articles are always available
 # ==================GET USER INFO=====================
 st.markdown("### NEWSLETTER DETAILS")
 newsletter_title = st.text_input("Newsletter Title", value="Weekly Digest")
 
 # =========== COUNTRY SELECTION ==============
 country_options = [
+    "Any",
     "United States",
     "United Kingdom",
     "India",
@@ -68,10 +70,12 @@ else:
 
 # =========== CATEGORY SELECTION ==============
 category_options = [
+    "Any",
     "Tech",
     "Business",
     "Science",
     "World",
+    "Other",
 ]
 selected_category = st.selectbox("Category", category_options, index=0)
 category_choice = None if selected_category == "Any" else selected_category
@@ -196,15 +200,14 @@ def newsletter_html_generator(curated_summaries, newsletter_title="Weekly Newsle
       paragraph using that article's summary and key points as body
       text, spanning whatever categories the curated summaries
       actually cover (world news, tech, business, science, etc).
-    - CRITICAL - no empty or blank cells: count the curated articles
-      first. If the count is odd, make the LAST article's section span
-      both columns (grid-column: 1 / -1) instead of leaving an empty
-      cell next to it. Never render an empty box, an empty <div>, or a
-      solid-colored block with no text in it anywhere on the page -
-      every colored box must contain real content from the curated
-      summaries. If there are not enough curated summaries to fill a
-      section you were going to add, simply omit that section instead
-      of leaving it blank.
+    - CRITICAL - there will always be EXACTLY 5 curated articles below.
+      Render EXACTLY 5 sections in the grid, one per article - never
+      more, never fewer. Since 5 is odd, the LAST article's section
+      must span both columns (grid-column: 1 / -1) instead of leaving
+      an empty cell next to it. Never render an empty box, an empty
+      <div>, or a solid-colored block with no text in it anywhere on
+      the page - every colored box must contain real content from the
+      curated summaries.
     - For 2-3 of the sections, add a short colored accent line
       (in a highlight color) above the paragraph showing that article's
       own category or relevance score.
@@ -258,19 +261,28 @@ def main_agent(agent, query):
 
     prompt = """Your task is to orchestrate the full newsletter workflow
     based on the instructions given below:
-    1. Call the weekly_article_collector tool with max_results as given,
-       and with the country and category as given (if any), to fetch
-       top trending news headlines for the week. If a country is given,
-       ONLY include news from that country. If a category is given,
-       ONLY include news from that category.
-    2. Call the article_summarizer tool separately on EACH collected
+    1. Call the weekly_article_collector tool with the pool_max_results
+       given, and with the country and category as given (if any), to
+       fetch a pool of candidate top trending news headlines for the
+       week. If a country is given, ONLY include news from that
+       country. If a category is given, ONLY include news from that
+       category.
+    2. The final newsletter MUST contain EXACTLY 5 curated articles,
+       never more and never fewer. If the pool returned fewer than 5
+       articles, call weekly_article_collector again with a larger
+       pool_max_results (and, if needed, a broader/looser version of
+       the country or category constraint) until at least 5 usable
+       articles are available.
+    3. Call the article_summarizer tool separately on EACH candidate
        article to get its summary, key points, category and relevance
        score.
-    3. 3. Keep the best EXACTLY 5 curated articles whenever 5 are available.
-    4. Combine all the remaining curated summaries (title, summary,
+    4. From the summarized candidates, keep EXACTLY the best 5
+       curated articles by relevance score.
+    5. Combine those EXACTLY 5 curated summaries (title, summary,
        key points, category, url for each) into one collection, then
        call the newsletter_html_generator tool once with that full
-       collection so all curated topics appear in the final newsletter.
+       collection so all 5 curated articles appear in the final
+       newsletter.
     Give the final response output strictly in HTML, no markdowns,
     no code fences, no explanation text before or after the HTML.
     Instructions given below:
@@ -299,7 +311,10 @@ if st.button("Generate Newsletter"):
         user_query = (
             f"Create this week's newsletter covering the top trending "
             f"news stories of the week."
-            + f"\nUse max_results={max_results} when collecting articles."
+            + f"\nUse pool_max_results={collector_pool_size} as the starting "
+              f"pool size when collecting candidate articles."
+            + "\nThe final newsletter must contain EXACTLY "
+              f"{max_results} curated articles - not more, not fewer."
             + f"\nNewsletter Title: {newsletter_title}"
             + country_line
             + category_line
