@@ -46,7 +46,6 @@ newsletter_title = st.text_input("Newsletter Title", value="Weekly Digest")
 
 # =========== COUNTRY SELECTION ==============
 country_options = [
-    "Any",
     "United States",
     "United Kingdom",
     "India",
@@ -69,12 +68,10 @@ else:
 
 # =========== CATEGORY SELECTION ==============
 category_options = [
-    "Any",
     "Tech",
     "Business",
     "Science",
     "World",
-    "Other",
 ]
 selected_category = st.selectbox("Category", category_options, index=0)
 category_choice = None if selected_category == "Any" else selected_category
