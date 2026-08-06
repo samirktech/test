@@ -9,40 +9,38 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.agents import create_agent
 from tavily import TavilyClient
 
-# ================= PAGE CONFIG =================
+# To show web-app: complete page layout
 st.set_page_config(layout="wide")
 
-# ================= TITLE =======================
+# To give title
 st.title("AI NEWSLETTER GENERATOR")
 
-st.write(
-    """
-    This app helps you build a curated, styled HTML newsletter
-    from this week's top trending news using a LangChain agent.
-    """
-)
+st.write("""This app helps you build a curated, styled HTML newsletter
+from this week's top trending news using a LangChain agent.""")
 
-# ================= SIDEBAR =====================
 st.sidebar.title("Fill Important Details")
 
+# ============ API KEYS ===================
 TAVILY_API_KEY = st.sidebar.text_input("Tavily-API", type="password")
 GOOGLE_API_KEY = st.sidebar.text_input("Gemini-API", type="password")
 
-if not all([TAVILY_API_KEY, GOOGLE_API_KEY]):
+all_API = [TAVILY_API_KEY, GOOGLE_API_KEY]
+
+if not all(all_API):
     st.error("Must give API keys")
     st.stop()
 
 st.success("API KEYS LOADED SUCCESSFULLY")
 
-# ================= MODEL =======================
+# =========== MODEL CREATION ==============
 model = ChatGoogleGenerativeAI(
-    model="gemini-3.5-flash-lite",
-    google_api_key=GOOGLE_API_KEY,
+    model='gemini-3.5-flash-lite',
+    google_api_key=GOOGLE_API_KEY
 )
 
 max_results = 5
 
-# ================= USER INPUT ==================
+# ==================GET USER INFO=====================
 st.markdown("### NEWSLETTER DETAILS")
 
 newsletter_title = st.text_input(
@@ -50,7 +48,7 @@ newsletter_title = st.text_input(
     value="Weekly Digest"
 )
 
-# NEW: Country / Region selector
+# ================= NEW: REGION SELECTOR =================
 news_scope = st.selectbox(
     "Select News Region",
     [
@@ -63,7 +61,7 @@ news_scope = st.selectbox(
     ]
 )
 
-# ================= TOOL 1 ======================
+# =========== TOOL 1 ======================
 def weekly_article_collector(region="Whole World", max_results=5):
     """Collect top trending news for selected region."""
 
@@ -100,25 +98,21 @@ def weekly_article_collector(region="Whole World", max_results=5):
 
     return articles
 
-# ================= TOOL 2 ======================
+
+# =========== TOOL 2 ======================
 def article_summarizer(article_text, article_title="Untitled"):
     """Summarize article using Gemini."""
 
-    prompt = f"""
-    You are a professional newsletter editor.
-
+    prompt = f"""You are a professional newsletter editor.
     Summarize the article below in 3-4 concise lines,
     then list 2-3 key points as bullets, assign a single
     category (Tech/Business/Science/World/Other) and give
     a relevance score out of 10 for a general audience.
 
     Article Title: {article_title}
-
-    Article Content:
-    {article_text}
+    Article Content: {article_text}
 
     Give output strictly in this format:
-
     Summary: <summary>
     Key Points: <point1>; <point2>; <point3>
     Category: <category>
@@ -128,11 +122,10 @@ def article_summarizer(article_text, article_title="Untitled"):
     response = model.invoke(prompt)
     return _extract_text(response)
 
-# ================= TOOL 3 ======================
-def newsletter_html_generator(
-    curated_summaries,
-    newsletter_title="Weekly Newsletter"
-):
+
+# =========== TOOL 3 ======================
+# KEEPING THIS EXACTLY SAME AS YOUR ORIGINAL CODE
+def newsletter_html_generator(curated_summaries, newsletter_title="Weekly Newsletter"):
     """Generate HTML newsletter."""
 
     current_date = datetime.datetime.now().strftime("%d %B %Y")
@@ -152,52 +145,43 @@ def newsletter_html_generator(
     response = model.invoke(prompt)
     return _extract_text(response)
 
-# ================= HELPER ======================
+
 def _extract_text(response):
     content = response.content
-
     if isinstance(content, str):
         return content
-
     if isinstance(content, list) and content:
         last = content[-1]
-
         if isinstance(last, dict) and "text" in last:
             return last["text"]
-
         return str(last)
-
     return str(content)
 
-# ================= AGENT =======================
+
+# ========== Agent Creation ================
 agent = create_agent(
     model=model,
-    tools=[
-        weekly_article_collector,
-        article_summarizer,
-        newsletter_html_generator
-    ]
+    tools=[weekly_article_collector, article_summarizer, newsletter_html_generator]
 )
 
-# ================= MAIN AGENT =================
+
+# ============== MAIN AGENT ===============
 def main_agent(agent, query):
 
-    prompt = """
-    Your task is to orchestrate the full newsletter workflow:
-
-    1. Collect weekly articles for the user-selected region or country.
+    prompt = """Your task is to orchestrate the full newsletter workflow:
+    1. Collect weekly articles for the selected region/country.
     2. Summarize each article.
-    3. Keep the best 5 articles.
+    3. Keep best 5 articles.
     4. Generate one HTML newsletter from all curated summaries.
-
     Return only HTML.
     """
 
     response = agent.invoke(
-        {"messages": [{"role": "user", "content": prompt + query}]}
+        {"messages": [{'role': 'user', 'content': prompt + query}]}
     )
 
-    return _extract_text(response["messages"][-1])
+    return _extract_text(response['messages'][-1])
+
 
 # ==========================================================
 # NEWSLETTER GENERATOR
@@ -205,26 +189,22 @@ def main_agent(agent, query):
 st.divider()
 st.subheader("📰 AI Newsletter Generator")
 
+# KEEPING BUTTON NAME SAME
 if st.button("Generate Newsletter"):
 
     with st.spinner("Agent Running..."):
 
+        # NEW: pass selected region into the query
         user_query = (
-            f"Create this week's newsletter for: {news_scope}. "
-            f"Cover the top trending news stories from that region only. "
-            f"If the region is Whole World, include global news."
+            f"Create this week's newsletter covering the top trending "
+            f"news stories for: {news_scope}. "
+            f"If Whole World is selected, include global news."
             + f"\nUse max_results={max_results}."
             + f"\nNewsletter Title: {newsletter_title}"
         )
 
         raw_code = main_agent(agent, user_query)
-
-        code = (
-            raw_code
-            .replace("```html", "")
-            .replace("```", "")
-            .strip()
-        )
+        code = raw_code.replace("```html", "").replace("```", "").strip()
 
         st.success(f"Newsletter generated for {news_scope}!")
 
@@ -237,9 +217,4 @@ if st.button("Generate Newsletter"):
 
         st.divider()
         st.subheader("Preview")
-
-        st.components.v1.html(
-            code,
-            height=900,
-            scrolling=True
-        )
+        st.components.v1.html(code, height=900, scrolling=True)
