@@ -1,11 +1,22 @@
 """
 AI Newsletter Generator - Streamlit App
-Built using LangChain Agent (Tool Calling) + Gemini + Tavily
+Built using Multi-Agent Orchestration (three specialized, single-tool
+LangChain agents coordinated by a supervisor function) + Gemini + Tavily.
+
+Architecture:
+    Collector Agent   -> owns weekly_article_collector tool only
+    Summarizer Agent  -> owns article_summarizer tool only
+    Editor Agent      -> owns newsletter_html_generator tool only
+    orchestrate_newsletter() is the supervisor that calls each agent in
+    turn and passes structured data between them. No single agent has
+    access to more than one tool, and no agent decides the overall
+    workflow - the supervisor does.
 """
 
+import ast
+import json
 import datetime
 import streamlit as st
-from langchain_core.callbacks import BaseCallbackHandler
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.agents import create_agent
 from tavily import TavilyClient
@@ -17,7 +28,8 @@ st.set_page_config(layout="wide")
 st.title("AI NEWSLETTER GENERATOR")
 
 st.write("""This app helps you build a curated, styled HTML newsletter
-from this week's top trending news using a LangChain agent.""")
+from this week's top trending news for one country and one category,
+using a multi-agent pipeline (Collector -> Summarizer -> Editor).""")
 
 st.sidebar.title("Fill Important Details")
 
@@ -46,27 +58,36 @@ max_results = 5
 st.markdown("### NEWSLETTER DETAILS")
 newsletter_title = st.text_input("Newsletter Title", value="Weekly Digest")
 
-# ---------- 1. Country / Region ----------
-REGION_PRESETS = ["World", "India", "Asia", "Europe", "United States", "Custom"]
-region_choice = st.selectbox("Region / Country", REGION_PRESETS, index=0)
-if region_choice == "Custom":
-    region = st.text_input("Enter custom region/country", value="")
+# ---------- 1. Country (no region/continent options, single country only) ----------
+COUNTRY_PRESETS = [
+    "India", "United States", "United Kingdom", "Canada", "Australia",
+    "Germany", "France", "Japan", "Singapore", "United Arab Emirates",
+    "Custom",
+]
+country_choice = st.selectbox("Country", COUNTRY_PRESETS, index=0)
+if country_choice == "Custom":
+    country = st.text_input("Enter custom country", value="")
 else:
-    region = region_choice
+    country = country_choice
 
-# ---------- 3. Category / Topic filter ----------
+if not country.strip():
+    st.warning("Please enter a country to continue.")
+    st.stop()
+
+# ---------- 2. Category / Topic filter (single choice only) ----------
 CATEGORY_OPTIONS = [
     "World", "Tech", "Business", "Science", "Sports",
     "Entertainment", "Health", "Politics"
 ]
-categories = st.multiselect(
-    "Category / Topic filter",
+category = st.selectbox(
+    "Category / Topic",
     CATEGORY_OPTIONS,
-    default=["World"],
-    help="Pick one or more topics to focus the search on. Leave as World for a general mix."
+    index=0,
+    help="Pick exactly one topic. The newsletter will contain news from "
+         "this category only.",
 )
 
-# ---------- 4. Theme / Color scheme ----------
+# ---------- 3. Theme / Color scheme ----------
 THEME_OPTIONS = {
     "Classic Newspaper": (
         "Classic black-and-white broadsheet newspaper look: cream/off-white "
@@ -93,19 +114,14 @@ theme_choice = st.selectbox("Newsletter Theme", list(THEME_OPTIONS.keys()), inde
 theme_style_hint = THEME_OPTIONS[theme_choice]
 
 
-# =========== TOOL 1 ======================
-def weekly_article_collector(max_results: int = 5, region: str = "World", categories: list[str] = None):
+# =========== TOOL 1 (owned only by the Collector Agent) ======================
+def weekly_article_collector(max_results: int = 5, country: str = "", category: str = "World"):
     """This function searches the web for the top trending news
     headlines published in the current week using the Tavily search
-    API. Optionally focus the search on a specific region/country and
-    one or more categories/topics. Returns article metadata: title,
-    url, content and published date."""
+    API, restricted to a single country and a single category/topic.
+    Returns article metadata: title, url, content and published date."""
 
-    categories = categories or []
-    topic_part = " and ".join(categories) if categories else "general"
-    region_part = "" if not region or region.lower() == "world" else f" in {region}"
-
-    query = f"top trending {topic_part} news headlines this week{region_part}"
+    query = f"top trending {category} news headlines this week in {country}"
 
     client = TavilyClient(api_key=TAVILY_API_KEY)
     response = client.search(
@@ -127,7 +143,7 @@ def weekly_article_collector(max_results: int = 5, region: str = "World", catego
     return articles
 
 
-# =========== TOOL 2 ======================
+# =========== TOOL 2 (owned only by the Summarizer Agent) ======================
 def article_summarizer(article_text, article_title="Untitled"):
     """This function takes article text or url content and
     produces a concise summary, key points, category
@@ -154,7 +170,7 @@ def article_summarizer(article_text, article_title="Untitled"):
     return _extract_text(response)
 
 
-# =========== TOOL 3 ======================
+# =========== TOOL 3 (owned only by the Editor Agent) ======================
 def newsletter_html_generator(curated_summaries, newsletter_title="Weekly Newsletter", style_hint=""):
     """This function converts curated article summaries
     into a styled html newsletter template suitable
@@ -199,19 +215,18 @@ def newsletter_html_generator(curated_summaries, newsletter_title="Weekly Newsle
       newspaper nameplate).
     - Sub-banner: a full-width colored horizontal band directly below
       the masthead with small bold centered uppercase tagline text
-      summarizing that this covers this week's top stories across
-      any topic/category (do not hardcode a single subject like "AI"
-      in the tagline - infer a short general tagline from the actual
-      mix of categories present in the curated summaries below).
+      stating that this covers this week's top stories, naming the
+      single country and single category the stories come from (do not
+      imply multiple countries or multiple categories are covered).
     - Below the banner, use a CSS grid with exactly 2 columns
       (display: grid; grid-template-columns: 1fr 1fr; column-gap and
       row-gap around 24px) to lay out one section per curated article.
       Do NOT create a single "top story" block - turn every curated
       article into its own section: a bold uppercase heading (short,
-      based on the article's own title/category) followed by a
-      paragraph using that article's summary and key points as body
-      text, spanning whatever categories the curated summaries
-      actually cover (world news, tech, business, science, etc).
+      based on the article's own title) followed by a paragraph using
+      that article's summary and key points as body text. All articles
+      belong to the same single category, so do not invent separate
+      category labels that contradict that.
     - CRITICAL - no empty or blank cells: count the curated articles
       first. If the count is odd, make the LAST article's section span
       both columns (grid-column: 1 / -1) instead of leaving an empty
@@ -223,14 +238,13 @@ def newsletter_html_generator(curated_summaries, newsletter_title="Weekly Newsle
       of leaving it blank.
     - For 2-3 of the sections, add a short colored accent line
       (in a highlight color) above the paragraph showing that article's
-      own category or relevance score.
+      relevance score.
     - At the bottom of each column, add one pale colored info box
-      containing that source article's category and a bold "Read More"
-      link pointing to the real article url - only add this info box if
-      there is a real article category and url to put inside it, never
-      as an empty filler box.
-      Use the real curated article titles, summaries, categories and
-      urls throughout - never placeholder/lorem ipsum text.
+      containing a bold "Read More" link pointing to the real article
+      url - only add this info box if there is a real article url to
+      put inside it, never as an empty filler box.
+      Use the real curated article titles, summaries and urls
+      throughout - never placeholder/lorem ipsum text.
     - Footer: a full-width colored strip at the very bottom with small
       bold centered text reading something like "Compiled automatically
       by a multi-agent AI pipeline | Generated on {current_date}".
@@ -238,7 +252,7 @@ def newsletter_html_generator(curated_summaries, newsletter_title="Weekly Newsle
 
     Newsletter Title: {newsletter_title}
     Generated On: {current_date}
-    Curated Summaries (multiple topics/categories from this week): {curated_summaries}
+    Curated Summaries (single country, single category, this week): {curated_summaries}
     """
 
     response = model.invoke(prompt)
@@ -259,97 +273,164 @@ def _extract_text(response):
     return str(content)
 
 
-# ========== Agent Creation ================
-agent = create_agent(
-    model=model,
-    tools=[weekly_article_collector, article_summarizer, newsletter_html_generator]
-)
+def _get_tool_messages(messages, tool_name):
+    """Pull out the raw outputs a specific tool produced inside one
+    agent's message history. Works whether messages are LangChain
+    message objects or plain dicts, since agents in this app are each
+    restricted to exactly one tool and we trust that tool's structured
+    output over the agent's own restated text."""
+    outputs = []
+    for m in messages:
+        if isinstance(m, dict):
+            m_type = m.get("type") or m.get("role")
+            m_name = m.get("name")
+            m_content = m.get("content")
+        else:
+            m_type = getattr(m, "type", None)
+            m_name = getattr(m, "name", None)
+            m_content = getattr(m, "content", None)
+        if m_type == "tool" and m_name == tool_name:
+            outputs.append(m_content)
+    return outputs
 
 
-# ============== PROGRESS CALLBACK (2. real per-stage progress from the agent) ===============
-TOOL_STAGE_LABELS = {
-    "weekly_article_collector": "Collecting this week's top articles...",
-    "article_summarizer": "Summarizing articles...",
-    "newsletter_html_generator": "Building the HTML newsletter...",
-}
+def _parse_tool_output(raw):
+    """Best-effort parse of a tool's raw output back into a Python
+    object (list/dict), falling back to the original value."""
+    if isinstance(raw, (list, dict)):
+        return raw
+    if not isinstance(raw, str):
+        return raw
+    try:
+        return ast.literal_eval(raw)
+    except (ValueError, SyntaxError):
+        try:
+            return json.loads(raw)
+        except (ValueError, TypeError):
+            return raw
 
 
-class StreamlitAgentProgress(BaseCallbackHandler):
-    """Listens to the agent's actual tool calls and reflects them as
-    live stage updates in an st.status container, instead of a generic
-    spinner."""
-
-    def __init__(self, status):
-        self.status = status
-        self._summarize_count = 0
-
-    def on_tool_start(self, serialized, input_str, **kwargs):
-        name = (serialized or {}).get("name") or kwargs.get("name") or ""
-        if name == "article_summarizer":
-            self._summarize_count += 1
-            self.status.update(
-                label=f"Summarizing articles... (article {self._summarize_count})",
-                state="running",
-            )
-            self.status.write(f"Summarizing article {self._summarize_count}...")
-        elif name in TOOL_STAGE_LABELS:
-            self.status.update(label=TOOL_STAGE_LABELS[name], state="running")
-            self.status.write(TOOL_STAGE_LABELS[name])
-
-    def on_tool_error(self, error, **kwargs):
-        self.status.write(f"A tool call hit an error: {error}")
+# ========== Multi-Agent Setup ================
+# Each agent is scoped to exactly one tool and one job. There is no
+# single "do everything" agent - the three agents below cannot see or
+# call each other's tools. Coordination across them is handled entirely
+# by the orchestrate_newsletter() supervisor function further down.
+collector_agent = create_agent(model=model, tools=[weekly_article_collector])
+summarizer_agent = create_agent(model=model, tools=[article_summarizer])
+editor_agent = create_agent(model=model, tools=[newsletter_html_generator])
 
 
-# ============== MAIN AGENT ===============
-def main_agent(agent, query, status):
-    """This is the main agent, or leader agent,
-    orchestrates the full newsletter workflow"""
+# ============== AGENT 1: COLLECTOR ===============
+def run_collector_agent(country, category, max_results, status):
+    status.update(label="Agent 1/3 - Collector: gathering this week's headlines...", state="running")
+    status.write(f"Collector Agent searching '{category}' news in {country}...")
 
-    prompt = """Your task is to orchestrate the full newsletter workflow
-    based on the instructions given below:
-    1. Call the weekly_article_collector tool with max_results, region
-       and categories as given, to fetch top trending news headlines
-       for that region/category focus for the week.
-    2. Call the article_summarizer tool separately on EACH collected
-       article to get its summary, key points, category and relevance
-       score.
-    3. Keep the best EXACTLY 5 curated articles whenever 5 are available.
-    4. Combine all the remaining curated summaries (title, summary,
-       key points, category, url for each) into one collection, then
-       call the newsletter_html_generator tool once with that full
-       collection and the given style_hint so all curated topics
-       appear in the final newsletter, styled according to style_hint.
-    Give the final response output strictly in HTML, no markdowns,
-    no code fences, no explanation text before or after the HTML.
-    Instructions given below:
-    """
-
-    prompt = prompt + query
-
-    handler = StreamlitAgentProgress(status)
-    response = agent.invoke(
-        {"messages": [{'role': 'user', 'content': prompt}]},
-        config={"callbacks": [handler]},
+    instruction = (
+        f"Call the weekly_article_collector tool exactly once with "
+        f"max_results={max_results}, country='{country}' and "
+        f"category='{category}' to fetch this week's top trending "
+        f"headlines for that single country and single category."
     )
+    result = collector_agent.invoke({"messages": [{"role": "user", "content": instruction}]})
+
+    tool_msgs = _get_tool_messages(result["messages"], "weekly_article_collector")
+    articles = _parse_tool_output(tool_msgs[-1]) if tool_msgs else []
+    if not isinstance(articles, list):
+        articles = []
+
+    status.write(f"Collector Agent found {len(articles)} article(s).")
+    return articles
+
+
+# ============== AGENT 2: SUMMARIZER ===============
+def run_summarizer_agent(articles, status):
+    status.update(label="Agent 2/3 - Summarizer: summarizing each article...", state="running")
+    summaries = []
+
+    for i, article in enumerate(articles, start=1):
+        title = article.get("title", "Untitled")
+        status.write(f"Summarizer Agent processing article {i}/{len(articles)}: {title}")
+
+        instruction = (
+            "Call the article_summarizer tool exactly once, passing the "
+            "article content below as article_text and the title as "
+            "article_title.\n\n"
+            f"Article Title: {title}\n"
+            f"Article Content: {article.get('content', '')}"
+        )
+        result = summarizer_agent.invoke({"messages": [{"role": "user", "content": instruction}]})
+
+        tool_msgs = _get_tool_messages(result["messages"], "article_summarizer")
+        summary_text = tool_msgs[-1] if tool_msgs else _extract_text(result["messages"][-1])
+
+        summaries.append({
+            "title": title,
+            "url": article.get("url", ""),
+            "summary": summary_text,
+        })
+
+    return summaries
+
+
+# ============== AGENT 3: EDITOR ===============
+def run_editor_agent(summaries, newsletter_title, style_hint, status):
+    status.update(label="Agent 3/3 - Editor: building the HTML newsletter...", state="running")
+    status.write("Editor Agent assembling the final newsletter...")
+
+    curated_blob = "\n\n".join(
+        f"Title: {s['title']}\nURL: {s['url']}\nSummary: {s['summary']}"
+        for s in summaries
+    )
+    instruction = (
+        "Call the newsletter_html_generator tool exactly once, passing "
+        f"the curated_summaries below, newsletter_title='{newsletter_title}' "
+        "and the given style_hint.\n\n"
+        f"style_hint: {style_hint}\n\ncurated_summaries:\n{curated_blob}"
+    )
+    result = editor_agent.invoke({"messages": [{"role": "user", "content": instruction}]})
+
+    tool_msgs = _get_tool_messages(result["messages"], "newsletter_html_generator")
+    if tool_msgs:
+        return tool_msgs[-1]
+    return _extract_text(result["messages"][-1])
+
+
+# ============== SUPERVISOR: ORCHESTRATES THE 3 AGENTS ===============
+def orchestrate_newsletter(country, category, max_results, newsletter_title, style_hint, status):
+    """Supervisor function. Runs the Collector, Summarizer and Editor
+    agents in sequence, passing structured data between them. This is
+    the coordination layer of the multi-agent system - none of the
+    three agents knows about the others or about the overall workflow;
+    only the supervisor does."""
+
+    articles = run_collector_agent(country, category, max_results, status)
+    if not articles:
+        status.update(label="No articles found", state="error")
+        return (
+            "<html><body style='color:#111;background:#fff;'>"
+            "<p>No articles were found for this country/category this week. "
+            "Try a different country or category.</p></body></html>"
+        )
+
+    curated_articles = articles[:5]
+    summaries = run_summarizer_agent(curated_articles, status)
+    html_code = run_editor_agent(summaries, newsletter_title, style_hint, status)
+
     status.update(label="Newsletter ready!", state="complete")
-    code = _extract_text(response['messages'][-1])
-    return code
+    return html_code
 
 
-# ========== CALLING MAIN AGENT ===============
+# ========== CALLING THE MULTI-AGENT PIPELINE ===============
 if st.button("Generate Newsletter"):
-    user_query = (
-        f"Create this week's newsletter covering the top trending "
-        f"news stories of the week."
-        + f"\nUse max_results={max_results} when collecting articles."
-        + f"\nRegion: {region if region else 'World'}"
-        + f"\nCategories: {', '.join(categories) if categories else 'World (general mix)'}"
-        + f"\nNewsletter Title: {newsletter_title}"
-        + f"\nstyle_hint for newsletter_html_generator: {theme_style_hint}"
-    )
-
-    with st.status("Starting newsletter generation...", expanded=True) as status:
-        raw_code = main_agent(agent, user_query, status)
+    with st.status("Starting multi-agent newsletter generation...", expanded=True) as status:
+        raw_code = orchestrate_newsletter(
+            country=country,
+            category=category,
+            max_results=max_results,
+            newsletter_title=newsletter_title,
+            style_hint=theme_style_hint,
+            status=status,
+        )
 
     code = raw_code.replace("```html", "").replace("```", "").strip()
 
