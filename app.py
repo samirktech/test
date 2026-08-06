@@ -1,4 +1,4 @@
-````python
+
 """
 AI Newsletter Generator - Streamlit App
 Built using LangChain Agent (Tool Calling) + Gemini + Tavily
@@ -255,4 +255,4 @@ if st.button("Generate Newsletter"):
         st.divider()
         st.subheader("Preview")
         st.components.v1.html(code, height=900, scrolling=True)
-````
+
