@@ -1,11 +1,13 @@
 """
 AI Newsletter Generator - Streamlit App
-Built using LangChain (Tool Calling) + Gemini + Tavily
+Built using LangChain Agent (Tool Calling) + Gemini + Tavily
 """
 
 import datetime
 import streamlit as st
+from langchain_core.callbacks import BaseCallbackHandler
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain.agents import create_agent
 from tavily import TavilyClient
 
 # To show web-app: complete page layout
@@ -15,7 +17,7 @@ st.set_page_config(layout="wide")
 st.title("AI NEWSLETTER GENERATOR")
 
 st.write("""This app helps you build a curated, styled HTML newsletter
-from this week's top trending news using LangChain tool-calling.""")
+from this week's top trending news using a LangChain agent.""")
 
 st.sidebar.title("Fill Important Details")
 
@@ -38,150 +40,72 @@ elif all(all_API):
 else:
     st.info("PASS ALL API-KEYS")
 
+max_results = 5
+
 # ==================GET USER INFO=====================
 st.markdown("### NEWSLETTER DETAILS")
-
 newsletter_title = st.text_input("Newsletter Title", value="Weekly Digest")
 
-# ---------- Country / Region ----------
-COUNTRY_PRESETS = [
-    "World",
-    "India",
-    "USA",
-    "UK",
-    "Asia",
-    "Europe",
-    "Middle East",
-    "Africa",
-    "Southeast Asia",
-    "Latin America",
-    "Custom (type below)",
-]
-
-col_c1, col_c2 = st.columns([1, 1])
-
-with col_c1:
-    country_choice = st.selectbox(
-        "Country / Region Focus",
-        options=COUNTRY_PRESETS,
-        index=0,
-        help='Pick "World" for global coverage, a preset region/country, '
-             'or "Custom (type below)" to type your own.'
-    )
-
-with col_c2:
-    custom_country = st.text_input(
-        "Custom Country / Region (only used if 'Custom' is selected above)",
-        value="",
-        placeholder='e.g. "Japan", "Middle East", "Scandinavia"'
-    )
-
-if country_choice == "Custom (type below)":
-    selected_country = (custom_country or "").strip() or "World"
+# ---------- 1. Country / Region ----------
+REGION_PRESETS = ["World", "India", "Asia", "Europe", "United States", "Custom"]
+region_choice = st.selectbox("Region / Country", REGION_PRESETS, index=0)
+if region_choice == "Custom":
+    region = st.text_input("Enter custom region/country", value="")
 else:
-    selected_country = country_choice
+    region = region_choice
 
-# ---------- Category / Topic ----------
+# ---------- 3. Category / Topic filter ----------
 CATEGORY_OPTIONS = [
-    "Any / Mixed",
-    "Technology",
-    "Business",
-    "Science",
-    "Sports",
-    "Entertainment",
-    "Health",
-    "Politics",
+    "World", "Tech", "Business", "Science", "Sports",
+    "Entertainment", "Health", "Politics"
 ]
-
-selected_category = st.selectbox(
-    "Category / Topic Filter",
-    options=CATEGORY_OPTIONS,
-    index=0,
-    help='Pick a specific topic to focus the newsletter on, or leave as '
-         '"Any / Mixed" for a general mix of top stories.'
+categories = st.multiselect(
+    "Category / Topic filter",
+    CATEGORY_OPTIONS,
+    default=["World"],
+    help="Pick one or more topics to focus the search on. Leave as World for a general mix."
 )
 
-# ---------- Number of Articles ----------
-max_results = st.slider(
-    "Number of Articles",
-    min_value=3,
-    max_value=8,
-    value=5,
-    help="Controls how many articles are fetched, summarized, and "
-         "included in the final newsletter. The layout automatically "
-         "adapts (including odd counts) so there are never blank boxes."
-)
-
-# ---------- Theme ----------
-THEME_OPTIONS = [
-    "Classic Newspaper (Light)",
-    "Dark Mode",
-    "Pastel",
-    "Corporate / Professional",
-]
-
-selected_theme = st.selectbox(
-    "Newsletter Theme / Color Scheme",
-    options=THEME_OPTIONS,
-    index=0,
-    help="Controls the color palette and visual style used in the "
-         "generated HTML newsletter."
-)
-
-THEME_STYLE_HINTS = {
-    "Classic Newspaper (Light)": (
-        "Off-white/cream page background (around #f5f2ea), black or "
-        "very dark gray headline and body text, a deep maroon or navy "
-        "accent color for the sub-banner, accent lines and footer. "
-        "Classic newspaper nameplate feel."
+# ---------- 4. Theme / Color scheme ----------
+THEME_OPTIONS = {
+    "Classic Newspaper": (
+        "Classic black-and-white broadsheet newspaper look: cream/off-white "
+        "background, black serif headings, thin black rule lines, minimal color "
+        "used only for one or two accent highlights."
     ),
     "Dark Mode": (
-        "Dark background for the whole page (around #12141c or #1a1a1a), "
-        "light gray/off-white text (around #e8e8e8) for headlines and "
-        "body copy, a vivid accent color (electric blue, amber, or teal) "
-        "for the sub-banner, accent lines and footer. The pale info boxes "
-        "at the bottom of each column should still use light backgrounds "
-        "with dark text so they stay clearly readable against the dark page."
+        "Dark mode aesthetic: near-black background (#111 range), light "
+        "off-white body text, vibrant accent color (electric blue or amber) "
+        "for headings, banners and highlight lines, subtle lighter-gray borders."
     ),
     "Pastel": (
-        "Soft pastel page background (light lavender, mint, or blush, "
-        "around #f5f0fa), dark charcoal text for readability, pastel "
-        "pink/blue/yellow accent bands and rounded corners on boxes for "
-        "a soft, friendly look."
+        "Soft pastel aesthetic: light pastel background (blush pink or mint), "
+        "rounded section boxes, pastel accent bands (lavender, peach, baby blue), "
+        "dark charcoal text for strong contrast, friendly rounded sans-serif feel."
     ),
-    "Corporate / Professional": (
-        "Clean white or very light gray page background, navy or "
-        "steel-blue accent bands, dark slate-gray text, minimal rounded "
-        "corners, understated sans-serif styling for a professional, "
-        "business-report look."
+    "Corporate": (
+        "Clean corporate/business aesthetic: white background, navy blue and "
+        "slate gray accents, structured grid with clear dividing lines, "
+        "professional sans-serif headings, minimal decoration."
     ),
 }
+theme_choice = st.selectbox("Newsletter Theme", list(THEME_OPTIONS.keys()), index=0)
+theme_style_hint = THEME_OPTIONS[theme_choice]
 
 
 # =========== TOOL 1 ======================
-def weekly_article_collector(max_results=5, country="World", category="Any / Mixed"):
+def weekly_article_collector(max_results: int = 5, region: str = "World", categories: list[str] = None):
     """This function searches the web for the top trending news
     headlines published in the current week using the Tavily search
-    API. If country is "World" (or empty/not specified), it fetches
-    general top trending news from all over the world. If a specific
-    country or region is given (e.g. "India", "Middle East"), it
-    fetches top trending news headlines only from/about that
-    country/region. If category is not "Any / Mixed", results are
-    further focused on that topic (e.g. Technology, Sports). Returns
-    article metadata: title, url, content and published date."""
+    API. Optionally focus the search on a specific region/country and
+    one or more categories/topics. Returns article metadata: title,
+    url, content and published date."""
 
-    country = (country or "World").strip()
-    category = (category or "Any / Mixed").strip()
+    categories = categories or []
+    topic_part = " and ".join(categories) if categories else "general"
+    region_part = "" if not region or region.lower() == "world" else f" in {region}"
 
-    query_parts = ["top trending"]
-    if category.lower() not in ("", "any / mixed", "any", "mixed"):
-        query_parts.append(category.lower())
-    query_parts.append("news headlines this week")
-
-    if country.lower() not in ("", "world", "global", "all", "any"):
-        query_parts.append(f"in {country}")
-
-    query = " ".join(query_parts)
+    query = f"top trending {topic_part} news headlines this week{region_part}"
 
     client = TavilyClient(api_key=TAVILY_API_KEY)
     response = client.search(
@@ -213,9 +137,8 @@ def article_summarizer(article_text, article_title="Untitled"):
     prompt = f"""You are a professional newsletter editor.
     Summarize the article below in 3-4 concise lines,
     then list 2-3 key points as bullets, assign a single
-    category (Tech/Business/Science/World/Sports/Entertainment/Health/
-    Politics/Other) and give a relevance score out of 10 for a general
-    audience.
+    category (Tech/Business/Science/World/Other) and give
+    a relevance score out of 10 for a general audience.
 
     Article Title: {article_title}
     Article Content: {article_text}
@@ -232,19 +155,14 @@ def article_summarizer(article_text, article_title="Untitled"):
 
 
 # =========== TOOL 3 ======================
-def newsletter_html_generator(curated_summaries, newsletter_title="Weekly Newsletter",
-                               theme="Classic Newspaper (Light)", article_count=None):
+def newsletter_html_generator(curated_summaries, newsletter_title="Weekly Newsletter", style_hint=""):
     """This function converts curated article summaries
     into a styled html newsletter template suitable
     for email or web publishing, given curated summaries
-    text, newsletter title, a color/theme style, and the exact
-    number of curated articles (so the grid layout matches reality
-    and never leaves blank cells)."""
+    text, newsletter title, and an optional style/theme hint
+    describing the desired color scheme and visual mood."""
 
     current_date = datetime.datetime.now().strftime("%d %B %Y")
-    style_hint = THEME_STYLE_HINTS.get(theme, THEME_STYLE_HINTS["Classic Newspaper (Light)"])
-    if article_count is None:
-        article_count = curated_summaries.count("Article ")
 
     prompt = f"""Convert the curated article summaries below into a single
     self-contained HTML page styled like a printed magazine/school
@@ -252,11 +170,10 @@ def newsletter_html_generator(curated_summaries, newsletter_title="Weekly Newsle
     block in the <head> (CSS does not need to be inline), max content
     width around 900px, centered on the page with a bordered page frame.
 
-    COLOR / THEME DIRECTION FOR THIS NEWSLETTER:
+    THEME / STYLE DIRECTION (follow this closely for colors and feel):
     {style_hint}
 
-    CRITICAL - TEXT MUST ALWAYS BE VISIBLE (applies no matter which
-    theme colors are used above):
+    CRITICAL - TEXT MUST ALWAYS BE VISIBLE:
     - Every single text element (body, headings, paragraphs, links, list
       items, spans) MUST have an explicit CSS `color` property with a
       concrete hex/rgb value (e.g. color: #1a1a1a). NEVER leave color
@@ -282,10 +199,10 @@ def newsletter_html_generator(curated_summaries, newsletter_title="Weekly Newsle
       newspaper nameplate).
     - Sub-banner: a full-width colored horizontal band directly below
       the masthead with small bold centered uppercase tagline text
-      summarizing that this covers this week's top stories (infer a
-      short tagline from the actual mix of categories present in the
-      curated summaries below - do not hardcode a single subject unless
-      every curated article genuinely belongs to that one subject).
+      summarizing that this covers this week's top stories across
+      any topic/category (do not hardcode a single subject like "AI"
+      in the tagline - infer a short general tagline from the actual
+      mix of categories present in the curated summaries below).
     - Below the banner, use a CSS grid with exactly 2 columns
       (display: grid; grid-template-columns: 1fr 1fr; column-gap and
       row-gap around 24px) to lay out one section per curated article.
@@ -293,31 +210,35 @@ def newsletter_html_generator(curated_summaries, newsletter_title="Weekly Newsle
       article into its own section: a bold uppercase heading (short,
       based on the article's own title/category) followed by a
       paragraph using that article's summary and key points as body
-      text.
-    - CRITICAL - EXACT ARTICLE COUNT, NO EMPTY OR BLANK CELLS: There are
-      exactly {article_count} curated articles below - create EXACTLY
-      that many sections, no more, no fewer, and no placeholder/empty
-      sections. {"Since " + str(article_count) + " is odd, make ONLY the LAST article's section span both columns (grid-column: 1 / -1) so the grid ends cleanly with no empty trailing cell." if article_count % 2 == 1 else "Since " + str(article_count) + " is even, keep every section a single column so the grid fills perfectly with no empty trailing cell."}
-      Never render an empty box, an empty <div>, or a solid-colored
-      block with no real text in it anywhere on the page.
+      text, spanning whatever categories the curated summaries
+      actually cover (world news, tech, business, science, etc).
+    - CRITICAL - no empty or blank cells: count the curated articles
+      first. If the count is odd, make the LAST article's section span
+      both columns (grid-column: 1 / -1) instead of leaving an empty
+      cell next to it. Never render an empty box, an empty <div>, or a
+      solid-colored block with no text in it anywhere on the page -
+      every colored box must contain real content from the curated
+      summaries. If there are not enough curated summaries to fill a
+      section you were going to add, simply omit that section instead
+      of leaving it blank.
     - For 2-3 of the sections, add a short colored accent line
       (in a highlight color) above the paragraph showing that article's
       own category or relevance score.
     - At the bottom of each column, add one pale colored info box
-      (light blue/light pink, or theme-appropriate pale color) containing
-      that source article's category and a bold "Read More" link pointing
-      to the real article url - only add this info box if there is a real
-      article category and url to put inside it, never as an empty filler
-      box. Use the real curated article titles, summaries, categories and
+      containing that source article's category and a bold "Read More"
+      link pointing to the real article url - only add this info box if
+      there is a real article category and url to put inside it, never
+      as an empty filler box.
+      Use the real curated article titles, summaries, categories and
       urls throughout - never placeholder/lorem ipsum text.
     - Footer: a full-width colored strip at the very bottom with small
-      bold centered white text reading something like "Compiled
-      automatically by an AI pipeline | Generated on {current_date}".
+      bold centered text reading something like "Compiled automatically
+      by a multi-agent AI pipeline | Generated on {current_date}".
     Give final response strictly in HTML only, no markdown, no code fences.
 
     Newsletter Title: {newsletter_title}
     Generated On: {current_date}
-    Curated Summaries (use ALL and ONLY these, in this order): {curated_summaries}
+    Curated Summaries (multiple topics/categories from this week): {curated_summaries}
     """
 
     response = model.invoke(prompt)
@@ -338,100 +259,109 @@ def _extract_text(response):
     return str(content)
 
 
-def format_curated_summaries(curated_articles):
-    """Formats the list of {title, url, summary_block} dicts into one
-    text block for the HTML generator, and swaps in the real article
-    count so the prompt's {{ARTICLE_COUNT}} placeholder is accurate."""
-
-    blocks = []
-    for idx, item in enumerate(curated_articles, start=1):
-        blocks.append(
-            f"Article {idx}:\n"
-            f"Title: {item['title']}\n"
-            f"URL: {item['url']}\n"
-            f"{item['summary_block']}\n"
-        )
-    return "\n".join(blocks)
+# ========== Agent Creation ================
+agent = create_agent(
+    model=model,
+    tools=[weekly_article_collector, article_summarizer, newsletter_html_generator]
+)
 
 
-# ========== DETERMINISTIC PIPELINE ===============
-# Note: instead of letting an LLM "leader" agent freely decide when/how to
-# call each tool, the pipeline below calls weekly_article_collector,
-# article_summarizer, and newsletter_html_generator directly in a fixed
-# order. This guarantees the country/region and category filters you pick
-# are always respected exactly (no chance of the agent mixing in other
-# countries), keeps the article count consistent with the slider so the
-# HTML grid never has blank cells, and lets the UI show real progress for
-# each stage instead of a single opaque spinner.
+# ============== PROGRESS CALLBACK (2. real per-stage progress from the agent) ===============
+TOOL_STAGE_LABELS = {
+    "weekly_article_collector": "Collecting this week's top articles...",
+    "article_summarizer": "Summarizing articles...",
+    "newsletter_html_generator": "Building the HTML newsletter...",
+}
 
-def run_newsletter_pipeline(country, category, max_results, newsletter_title, theme, status):
-    # ---- Stage 1: Collect ----
-    status.update(label=f"Collecting articles ({country} · {category})...", state="running")
-    articles = weekly_article_collector(
-        max_results=max_results, country=country, category=category
+
+class StreamlitAgentProgress(BaseCallbackHandler):
+    """Listens to the agent's actual tool calls and reflects them as
+    live stage updates in an st.status container, instead of a generic
+    spinner."""
+
+    def __init__(self, status):
+        self.status = status
+        self._summarize_count = 0
+
+    def on_tool_start(self, serialized, input_str, **kwargs):
+        name = (serialized or {}).get("name") or kwargs.get("name") or ""
+        if name == "article_summarizer":
+            self._summarize_count += 1
+            self.status.update(
+                label=f"Summarizing articles... (article {self._summarize_count})",
+                state="running",
+            )
+            self.status.write(f"Summarizing article {self._summarize_count}...")
+        elif name in TOOL_STAGE_LABELS:
+            self.status.update(label=TOOL_STAGE_LABELS[name], state="running")
+            self.status.write(TOOL_STAGE_LABELS[name])
+
+    def on_tool_error(self, error, **kwargs):
+        self.status.write(f"A tool call hit an error: {error}")
+
+
+# ============== MAIN AGENT ===============
+def main_agent(agent, query, status):
+    """This is the main agent, or leader agent,
+    orchestrates the full newsletter workflow"""
+
+    prompt = """Your task is to orchestrate the full newsletter workflow
+    based on the instructions given below:
+    1. Call the weekly_article_collector tool with max_results, region
+       and categories as given, to fetch top trending news headlines
+       for that region/category focus for the week.
+    2. Call the article_summarizer tool separately on EACH collected
+       article to get its summary, key points, category and relevance
+       score.
+    3. Keep the best EXACTLY 5 curated articles whenever 5 are available.
+    4. Combine all the remaining curated summaries (title, summary,
+       key points, category, url for each) into one collection, then
+       call the newsletter_html_generator tool once with that full
+       collection and the given style_hint so all curated topics
+       appear in the final newsletter, styled according to style_hint.
+    Give the final response output strictly in HTML, no markdowns,
+    no code fences, no explanation text before or after the HTML.
+    Instructions given below:
+    """
+
+    prompt = prompt + query
+
+    handler = StreamlitAgentProgress(status)
+    response = agent.invoke(
+        {"messages": [{'role': 'user', 'content': prompt}]},
+        config={"callbacks": [handler]},
     )
-
-    if not articles:
-        status.update(label="No articles found.", state="error")
-        return None
-
-    st.write(f"Found {len(articles)} article(s).")
-
-    # ---- Stage 2: Summarize each article ----
-    status.update(label="Summarizing articles...", state="running")
-    progress_bar = st.progress(0)
-    curated = []
-    for i, article in enumerate(articles, start=1):
-        summary_block = article_summarizer(
-            article_text=article.get("content") or article.get("title") or "",
-            article_title=article.get("title") or "Untitled",
-        )
-        curated.append({
-            "title": article.get("title") or "Untitled",
-            "url": article.get("url") or "",
-            "summary_block": summary_block,
-        })
-        progress_bar.progress(i / len(articles))
-
-    # ---- Stage 3: Build HTML ----
-    status.update(label="Building HTML newsletter...", state="running")
-    curated_text = format_curated_summaries(curated)
-    raw_html = newsletter_html_generator(
-        curated_summaries=curated_text,
-        newsletter_title=newsletter_title,
-        theme=theme,
-        article_count=len(curated),
-    )
-    html_code = raw_html.replace("```html", "").replace("```", "").strip()
-
     status.update(label="Newsletter ready!", state="complete")
-    return html_code
+    code = _extract_text(response['messages'][-1])
+    return code
 
 
-# ========== RUN PIPELINE ===============
+# ========== CALLING MAIN AGENT ===============
 if st.button("Generate Newsletter"):
+    user_query = (
+        f"Create this week's newsletter covering the top trending "
+        f"news stories of the week."
+        + f"\nUse max_results={max_results} when collecting articles."
+        + f"\nRegion: {region if region else 'World'}"
+        + f"\nCategories: {', '.join(categories) if categories else 'World (general mix)'}"
+        + f"\nNewsletter Title: {newsletter_title}"
+        + f"\nstyle_hint for newsletter_html_generator: {theme_style_hint}"
+    )
+
     with st.status("Starting newsletter generation...", expanded=True) as status:
-        code = run_newsletter_pipeline(
-            country=selected_country,
-            category=selected_category,
-            max_results=max_results,
-            newsletter_title=newsletter_title,
-            theme=selected_theme,
-            status=status,
-        )
+        raw_code = main_agent(agent, user_query, status)
 
-    if code:
-        st.success("Newsletter generated!")
+    code = raw_code.replace("```html", "").replace("```", "").strip()
 
-        st.download_button(
-            "Download newsletter.html",
-            data=code,
-            file_name="newsletter.html",
-            mime="text/html",
-        )
+    st.success("Newsletter generated!")
 
-        st.divider()
-        st.subheader("Preview")
-        st.components.v1.html(code, height=900, scrolling=True)
-    else:
-        st.error("Couldn't generate a newsletter — try a broader country/region or category.")
+    st.download_button(
+        "Download newsletter.html",
+        data=code,
+        file_name="newsletter.html",
+        mime="text/html",
+    )
+
+    st.divider()
+    st.subheader("Preview")
+    st.components.v1.html(code, height=900, scrolling=True)
