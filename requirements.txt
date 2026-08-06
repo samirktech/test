@@ -1,4 +1,0 @@
-streamlit==1.58.0
-langchain
-langchain-google-genai
-tavily-python
