@@ -179,7 +179,6 @@ with st.sidebar.expander("🎨 Style Settings", expanded=False):
     creativity = st.slider(
         "Model creativity (temperature)", min_value=0.0, max_value=1.0, value=0.4, step=0.1
     )
-    preview_dark_mode = st.checkbox("Preview panel dark background", value=False)
 
 # =========== ARCHIVE / HISTORY ==============
 with st.sidebar.expander(f"🗂️ Archive ({len(st.session_state.history)})", expanded=False):
