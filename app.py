@@ -615,15 +615,7 @@ if st.session_state.last_html:
 
     st.divider()
     st.subheader("Preview")
-    if preview_dark_mode:
-        st.markdown(
-            '<div style="background:#111;padding:12px;border-radius:8px;">',
-            unsafe_allow_html=True,
-        )
-        st.components.v1.html(code, height=900, scrolling=True)
-        st.markdown("</div>", unsafe_allow_html=True)
-    else:
-        st.components.v1.html(code, height=900, scrolling=True)
+   
 
     if meta["links"]:
         with st.expander("🔗 Sources used in this newsletter"):
