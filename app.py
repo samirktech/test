@@ -10,19 +10,79 @@ from langchain.agents import create_agent
 from tavily import TavilyClient
 
 # To show web-app: complete page layout
-st.set_page_config(layout="wide")
+st.set_page_config(layout="wide", page_title="AI Newsletter Generator", page_icon="📰")
+
+# =========== CUSTOM STYLING ==============
+st.markdown("""
+<style>
+    .main .block-container {
+        padding-top: 2.5rem;
+        padding-bottom: 3rem;
+        max-width: 1100px;
+    }
+    h1 {
+        font-weight: 800 !important;
+        letter-spacing: -0.5px;
+    }
+    .app-subtitle {
+        color: #6b7280;
+        font-size: 1.05rem;
+        margin-top: -0.6rem;
+        margin-bottom: 1.5rem;
+    }
+    section[data-testid="stSidebar"] {
+        background-color: #f8f9fb;
+        border-right: 1px solid #e5e7eb;
+    }
+    section[data-testid="stSidebar"] h1 {
+        font-size: 1.3rem !important;
+        font-weight: 700 !important;
+    }
+    div[data-testid="stTextInput"] input,
+    div[data-testid="stSelectbox"] div[data-baseweb="select"] {
+        border-radius: 8px;
+    }
+    div.stButton > button, div.stDownloadButton > button {
+        border-radius: 8px;
+        font-weight: 600;
+        padding: 0.6rem 1.2rem;
+    }
+    div.stButton > button {
+        background-color: #ff4b4b;
+        color: white;
+        border: none;
+    }
+    div.stButton > button:hover {
+        background-color: #e63e3e;
+        color: white;
+    }
+    hr, div[data-testid="stDivider"] {
+        margin: 1.5rem 0;
+    }
+    .section-card {
+        background-color: #ffffff;
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
+        padding: 1.25rem 1.5rem;
+        margin-bottom: 1.25rem;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # To give title
-st.title("AI NEWSLETTER GENERATOR")
+st.title("📰 AI Newsletter Generator")
+st.markdown(
+    '<div class="app-subtitle">Build a curated, styled HTML newsletter from '
+    "this week's top trending news using a LangChain agent.</div>",
+    unsafe_allow_html=True,
+)
 
-st.write("""This app helps you build a curated, styled HTML newsletter
-from this week's top trending news using a LangChain agent.""")
-
-st.sidebar.title("Fill Important Details")
+st.sidebar.title("🔑 Fill Important Details")
+st.sidebar.caption("Your API keys stay local to this session and are never stored.")
 
 # ============ API KEYS ===================
-TAVILY_API_KEY = st.sidebar.text_input("Tavily-API", type="password")
-GOOGLE_API_KEY = st.sidebar.text_input("Gemini-API", type="password")
+TAVILY_API_KEY = st.sidebar.text_input("Tavily API Key", type="password")
+GOOGLE_API_KEY = st.sidebar.text_input("Gemini API Key", type="password")
 
 all_API = [TAVILY_API_KEY, GOOGLE_API_KEY]
 
@@ -30,7 +90,7 @@ if not all(all_API):
     st.error("Must give API keys")
     st.stop()
 elif all(all_API):
-    st.success("API KEYS LOADED SUCCESSFULLY")
+    st.sidebar.success("✅ API keys loaded successfully")
     # =========== MODEL CREATION ==============
     model = ChatGoogleGenerativeAI(
         model='gemini-3.5-flash-lite',
@@ -42,8 +102,12 @@ else:
 max_results = 5
 collector_pool_size = 10  # fetch a larger pool so exactly 5 curated articles are always available
 # ==================GET USER INFO=====================
-st.markdown("### NEWSLETTER DETAILS")
+st.markdown("### 🗞️ Newsletter Details")
+st.markdown('<div class="section-card">', unsafe_allow_html=True)
+
 newsletter_title = st.text_input("Newsletter Title", value="Weekly Digest")
+
+col1, col2 = st.columns(2)
 
 # =========== COUNTRY SELECTION ==============
 country_options = [
@@ -58,14 +122,15 @@ country_options = [
     "China",
     "Custom",
 ]
-selected_country = st.selectbox("Country", country_options, index=0)
+with col1:
+    selected_country = st.selectbox("🌍 Country", country_options, index=0)
 
-if selected_country == "Custom":
-    country_choice = st.text_input("Enter Country", value="")
-elif selected_country == "Any":
-    country_choice = None
-else:
-    country_choice = selected_country
+    if selected_country == "Custom":
+        country_choice = st.text_input("Enter Country", value="")
+    elif selected_country == "Any":
+        country_choice = None
+    else:
+        country_choice = selected_country
 
 # =========== CATEGORY SELECTION ==============
 category_options = [
@@ -74,8 +139,11 @@ category_options = [
     "Science",
     "World",
 ]
-selected_category = st.selectbox("Category", category_options, index=0)
-category_choice = None if selected_category == "Any" else selected_category
+with col2:
+    selected_category = st.selectbox("🏷️ Category", category_options, index=0)
+    category_choice = None if selected_category == "Any" else selected_category
+
+st.markdown('</div>', unsafe_allow_html=True)
 
 
 # =========== TOOL 1 ======================
@@ -264,18 +332,28 @@ def main_agent(agent, query):
        week. If a country is given, ONLY include news from that
        country. If a category is given, ONLY include news from that
        category.
-    2. The final newsletter MUST contain EXACTLY 5 curated articles,
-       never more and never fewer. If the pool returned fewer than 5
-       articles, call weekly_article_collector again with a larger
-       pool_max_results (and, if needed, a broader/looser version of
-       the country or category constraint) until at least 5 usable
-       articles are available.
-    3. Call the article_summarizer tool separately on EACH candidate
+    2. Call the article_summarizer tool separately on EACH candidate
        article to get its summary, key points, category and relevance
        score.
-    4. From the summarized candidates, keep EXACTLY the best 5
-       curated articles by relevance score.
-    5. Combine those EXACTLY 5 curated summaries (title, summary,
+    3. CATEGORY FILTER - if a specific category (not "Any") was given:
+       discard EVERY candidate whose category returned by
+       article_summarizer does not match the given category. Do NOT
+       keep an article from a different category just to reach 5 - a
+       mismatched-category article is never acceptable, no matter how
+       relevant it seems.
+    4. The final newsletter MUST contain EXACTLY 5 curated articles
+       that satisfy the category filter above, never more and never
+       fewer. If, after filtering, fewer than 5 matching articles
+       remain, call weekly_article_collector again with a larger
+       pool_max_results (keeping the SAME category constraint, never
+       loosening or dropping it) to fetch more candidates, summarize
+       the new candidates, and re-apply the category filter. Repeat
+       this until at least 5 category-matching articles are available.
+       Only the country constraint may be broadened if needed - the
+       category constraint must NEVER be relaxed or ignored.
+    5. From the filtered, summarized candidates, keep EXACTLY the best
+       5 curated articles by relevance score.
+    6. Combine those EXACTLY 5 curated summaries (title, summary,
        key points, category, url for each) into one collection, then
        call the newsletter_html_generator tool once with that full
        collection so all 5 curated articles appear in the final
@@ -292,16 +370,25 @@ def main_agent(agent, query):
     return code
 
 
+st.write("")
+
 # ========== CALLING MAIN AGENT ===============
-if st.button("Generate Newsletter"):
-    with st.spinner("Agent Running"):
+generate_clicked = st.button("✨ Generate Newsletter", use_container_width=False)
+
+if generate_clicked:
+    with st.spinner("🤖 Agent is researching, curating and designing your newsletter..."):
         if country_choice:
             country_line = f"\nCountry: {country_choice} (ONLY use news from this country)."
         else:
             country_line = "\nCountry: Any (do not restrict to a single country)."
 
         if category_choice:
-            category_line = f"\nCategory: {category_choice} (ONLY use news from this category)."
+            category_line = (
+                f"\nCategory: {category_choice} (STRICT - every one of the 5 "
+                f"curated articles MUST be from the '{category_choice}' category "
+                "only. Never include an article from any other category, even "
+                "if it means fetching a larger pool to find enough matches.)"
+            )
         else:
             category_line = "\nCategory: Any (do not restrict to a single category)."
 
@@ -320,15 +407,17 @@ if st.button("Generate Newsletter"):
         raw_code = main_agent(agent, user_query)
         code = raw_code.replace("```html", "").replace("```", "").strip()
 
-        st.success("Newsletter generated!")
+        st.success("✅ Newsletter generated successfully!")
 
         st.download_button(
-            "Download newsletter.html",
+            "⬇️ Download newsletter.html",
             data=code,
             file_name="newsletter.html",
             mime="text/html",
         )
 
         st.divider()
-        st.subheader("Preview")
+        st.subheader("👀 Preview")
+        st.markdown('<div class="section-card" style="padding:0.5rem;">', unsafe_allow_html=True)
         st.components.v1.html(code, height=900, scrolling=True)
+        st.markdown('</div>', unsafe_allow_html=True)
