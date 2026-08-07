@@ -1,84 +1,268 @@
 """
 AI Newsletter Generator - Streamlit App
-Built using LangChain Agent (Tool Calling) + Gemini + Tavily
+Built using a LangChain multi-tool agent (Tool Calling) + Gemini + Tavily
+
+Agent architecture:
+    Leader agent (create_agent) orchestrates 3 tools it can call in any
+    order / any number of times it decides is needed:
+        1. weekly_article_collector  -> Tavily web search
+        2. article_summarizer        -> Gemini summarization
+        3. newsletter_html_generator -> Gemini HTML generation
 """
 
+import time
 import datetime
+
 import streamlit as st
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.agents import create_agent
 from tavily import TavilyClient
 
-# To show web-app: complete page layout
-st.set_page_config(layout="wide")
+# =========================================================
+# PAGE CONFIG
+# =========================================================
+st.set_page_config(
+    page_title="AI Newsletter Generator",
+    page_icon="📰",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
-# To give title
-st.title("AI NEWSLETTER GENERATOR")
+# =========================================================
+# GLOBAL STYLING
+# =========================================================
+st.markdown(
+    """
+    <style>
+        /* ---- overall page ---- */
+        .stApp {
+            background: linear-gradient(180deg, #f7f8fc 0%, #eef1f8 100%);
+        }
 
-st.write("""This app helps you build a curated, styled HTML newsletter
-from this week's top trending news using a LangChain agent.""")
+        /* ---- hero header ---- */
+        .hero {
+            padding: 2.2rem 2.2rem 1.8rem 2.2rem;
+            border-radius: 18px;
+            background: linear-gradient(135deg, #4338ca 0%, #6366f1 45%, #8b5cf6 100%);
+            color: #ffffff;
+            margin-bottom: 1.6rem;
+            box-shadow: 0 10px 30px rgba(67, 56, 202, 0.25);
+        }
+        .hero h1 {
+            font-size: 2.1rem;
+            font-weight: 800;
+            margin: 0 0 0.4rem 0;
+            letter-spacing: 0.3px;
+            color: #ffffff;
+        }
+        .hero p {
+            font-size: 1.02rem;
+            color: #e9e8ff;
+            margin: 0;
+            max-width: 720px;
+        }
+        .hero .badge-row {
+            margin-top: 0.9rem;
+        }
+        .hero .badge {
+            display: inline-block;
+            background: rgba(255,255,255,0.16);
+            border: 1px solid rgba(255,255,255,0.35);
+            color: #ffffff;
+            padding: 0.25rem 0.7rem;
+            border-radius: 999px;
+            font-size: 0.78rem;
+            font-weight: 600;
+            margin-right: 0.5rem;
+            backdrop-filter: blur(4px);
+        }
 
-st.sidebar.title("Fill Important Details")
+        /* ---- section card ---- */
+        .section-card {
+            background: #ffffff;
+            border-radius: 14px;
+            padding: 1.3rem 1.5rem;
+            border: 1px solid #e7e8f2;
+            box-shadow: 0 2px 10px rgba(30, 30, 60, 0.04);
+            margin-bottom: 1.2rem;
+        }
+        .section-title {
+            font-weight: 700;
+            font-size: 1.02rem;
+            color: #2c2c54;
+            margin-bottom: 0.6rem;
+        }
 
-# ============ API KEYS ===================
-TAVILY_API_KEY = st.sidebar.text_input("Tavily-API", type="password")
-GOOGLE_API_KEY = st.sidebar.text_input("Gemini-API", type="password")
+        /* ---- sidebar ---- */
+        section[data-testid="stSidebar"] {
+            background: #1e1b3a;
+        }
+        section[data-testid="stSidebar"] * {
+            color: #ece9ff !important;
+        }
+        section[data-testid="stSidebar"] input {
+            color: #1e1b3a !important;
+        }
+
+        /* ---- buttons ---- */
+        .stButton > button {
+            background: linear-gradient(135deg, #4338ca, #7c3aed);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            padding: 0.65rem 1.4rem;
+            font-weight: 700;
+            font-size: 1rem;
+            box-shadow: 0 4px 14px rgba(67, 56, 202, 0.35);
+            transition: transform 0.08s ease-in-out;
+        }
+        .stButton > button:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 18px rgba(67, 56, 202, 0.45);
+        }
+
+        .stDownloadButton > button {
+            background: #16a34a;
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-weight: 700;
+        }
+
+        /* ---- metric chips ---- */
+        div[data-testid="stMetric"] {
+            background: #ffffff;
+            border: 1px solid #e7e8f2;
+            border-radius: 12px;
+            padding: 0.7rem 0.9rem;
+        }
+
+        footer {visibility: hidden;}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# =========================================================
+# HERO HEADER
+# =========================================================
+st.markdown(
+    """
+    <div class="hero">
+        <h1>📰 AI Newsletter Generator</h1>
+        <p>A LangChain multi-tool agent researches this week's top trending
+        stories with Tavily, summarizes and scores every candidate with
+        Gemini, then designs a fully styled, print-ready HTML newsletter —
+        all from a single click.</p>
+        <div class="badge-row">
+            <span class="badge">🔎 Tavily Search</span>
+            <span class="badge">✨ Gemini</span>
+            <span class="badge">🧠 LangChain Agent</span>
+            <span class="badge">🎨 Auto-styled HTML</span>
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+# =========================================================
+# SESSION STATE
+# =========================================================
+if "newsletter_html" not in st.session_state:
+    st.session_state.newsletter_html = None
+if "generation_seconds" not in st.session_state:
+    st.session_state.generation_seconds = None
+if "generated_title" not in st.session_state:
+    st.session_state.generated_title = None
+
+# =========================================================
+# SIDEBAR - API KEYS
+# =========================================================
+st.sidebar.markdown("## 🔑 API Keys")
+st.sidebar.caption("Your keys are only used for this session and are never stored.")
+
+TAVILY_API_KEY = st.sidebar.text_input(
+    "Tavily API Key", type="password", placeholder="tvly-..."
+)
+GOOGLE_API_KEY = st.sidebar.text_input(
+    "Gemini API Key", type="password", placeholder="AIza..."
+)
+
+with st.sidebar.expander("Where do I get these keys?"):
+    st.markdown(
+        "- **Tavily** → [app.tavily.com](https://app.tavily.com)\n"
+        "- **Gemini** → [aistudio.google.com/apikey](https://aistudio.google.com/apikey)"
+    )
 
 all_API = [TAVILY_API_KEY, GOOGLE_API_KEY]
+keys_ready = all(all_API)
 
-if not all(all_API):
-    st.error("Must give API keys")
-    st.stop()
-elif all(all_API):
-    st.success("API KEYS LOADED SUCCESSFULLY")
-    # =========== MODEL CREATION ==============
+if keys_ready:
+    st.sidebar.success("✅ API keys loaded")
     model = ChatGoogleGenerativeAI(
-        model='gemini-3.5-flash-lite',
-        google_api_key=GOOGLE_API_KEY
+        model="gemini-3.5-flash-lite",
+        google_api_key=GOOGLE_API_KEY,
     )
 else:
-    st.info("PASS ALL API-KEYS")
+    st.sidebar.warning("⏳ Enter both API keys to continue")
+
+st.sidebar.divider()
+st.sidebar.markdown("## ⚙️ How it works")
+st.sidebar.markdown(
+    "1. **Collector tool** pulls a pool of trending headlines\n"
+    "2. **Summarizer tool** scores & condenses each one\n"
+    "3. Agent keeps the **best 5** by relevance\n"
+    "4. **HTML tool** designs the final newsletter page"
+)
 
 max_results = 5
 collector_pool_size = 10  # fetch a larger pool so exactly 5 curated articles are always available
-# ==================GET USER INFO=====================
-st.markdown("### NEWSLETTER DETAILS")
-newsletter_title = st.text_input("Newsletter Title", value="Weekly Digest")
 
-# =========== COUNTRY SELECTION ==============
-country_options = [
-    "United States",
-    "United Kingdom",
-    "India",
-    "Canada",
-    "Australia",
-    "Germany",
-    "France",
-    "Japan",
-    "China",
-    "Custom",
-]
-selected_country = st.selectbox("Country", country_options, index=0)
+# =========================================================
+# NEWSLETTER DETAILS
+# =========================================================
+st.markdown('<div class="section-card">', unsafe_allow_html=True)
+st.markdown('<div class="section-title">📝 Newsletter Details</div>', unsafe_allow_html=True)
 
-if selected_country == "Custom":
-    country_choice = st.text_input("Enter Country", value="")
-elif selected_country == "Any":
-    country_choice = None
-else:
-    country_choice = selected_country
+newsletter_title = st.text_input(
+    "Newsletter Title", value="Weekly Digest", placeholder="e.g. The Monday Brief"
+)
 
-# =========== CATEGORY SELECTION ==============
-category_options = [
-    "Tech",
-    "Business",
-    "Science",
-    "World",
-]
-selected_category = st.selectbox("Category", category_options, index=0)
-category_choice = None if selected_category == "Any" else selected_category
+col1, col2 = st.columns(2)
 
+with col1:
+    country_options = [
+        "United States",
+        "United Kingdom",
+        "India",
+        "Canada",
+        "Australia",
+        "Germany",
+        "France",
+        "Japan",
+        "China",
+        "Any",
+        "Custom",
+    ]
+    selected_country = st.selectbox("🌍 Country", country_options, index=0)
 
-# =========== TOOL 1 ======================
+    if selected_country == "Custom":
+        country_choice = st.text_input("Enter Country", value="")
+    elif selected_country == "Any":
+        country_choice = None
+    else:
+        country_choice = selected_country
+
+with col2:
+    category_options = ["Tech", "Business", "Science", "World", "Any"]
+    selected_category = st.selectbox("🏷️ Category", category_options, index=0)
+    category_choice = None if selected_category == "Any" else selected_category
+
+st.markdown("</div>", unsafe_allow_html=True)
+
+# =========================================================
+# TOOL 1
+# =========================================================
 def weekly_article_collector(max_results=5, country=None, category=None):
     """This function searches the web for the top trending news
     headlines published in the current week using the Tavily search
@@ -115,7 +299,9 @@ def weekly_article_collector(max_results=5, country=None, category=None):
     return articles
 
 
-# =========== TOOL 2 ======================
+# =========================================================
+# TOOL 2
+# =========================================================
 def article_summarizer(article_text, article_title="Untitled"):
     """This function takes article text or url content and
     produces a concise summary, key points, category
@@ -142,7 +328,9 @@ def article_summarizer(article_text, article_title="Untitled"):
     return _extract_text(response)
 
 
-# =========== TOOL 3 ======================
+# =========================================================
+# TOOL 3
+# =========================================================
 def newsletter_html_generator(curated_summaries, newsletter_title="Weekly Newsletter"):
     """This function converts curated article summaries
     into a styled html newsletter template suitable
@@ -244,14 +432,16 @@ def _extract_text(response):
     return str(content)
 
 
-# ========== Agent Creation ================
-agent = create_agent(
-    model=model,
-    tools=[weekly_article_collector, article_summarizer, newsletter_html_generator]
-)
+# =========================================================
+# AGENT CREATION
+# =========================================================
+def build_agent():
+    return create_agent(
+        model=model,
+        tools=[weekly_article_collector, article_summarizer, newsletter_html_generator],
+    )
 
 
-# ============== MAIN AGENT ===============
 def main_agent(agent, query):
     """This is the main agent, or leader agent,
     orchestrates the full newsletter workflow"""
@@ -287,48 +477,125 @@ def main_agent(agent, query):
 
     prompt = prompt + query
 
-    response = agent.invoke({"messages": [{'role': 'user', 'content': prompt}]})
-    code = _extract_text(response['messages'][-1])
+    response = agent.invoke({"messages": [{"role": "user", "content": prompt}]})
+    code = _extract_text(response["messages"][-1])
     return code
 
 
-# ========== CALLING MAIN AGENT ===============
-if st.button("Generate Newsletter"):
-    with st.spinner("Agent Running"):
-        if country_choice:
-            country_line = f"\nCountry: {country_choice} (ONLY use news from this country)."
-        else:
-            country_line = "\nCountry: Any (do not restrict to a single country)."
+# =========================================================
+# GENERATE BUTTON
+# =========================================================
+st.markdown('<div class="section-card">', unsafe_allow_html=True)
+st.markdown('<div class="section-title">🚀 Generate</div>', unsafe_allow_html=True)
 
-        if category_choice:
-            category_line = f"\nCategory: {category_choice} (ONLY use news from this category)."
-        else:
-            category_line = "\nCategory: Any (do not restrict to a single category)."
+gen_col, clear_col = st.columns([1, 1])
+generate_clicked = gen_col.button(
+    "✨ Generate Newsletter", disabled=not keys_ready, use_container_width=True
+)
+clear_clicked = clear_col.button(
+    "🗑️ Clear Result", use_container_width=True, disabled=st.session_state.newsletter_html is None
+)
 
-        user_query = (
-            f"Create this week's newsletter covering the top trending "
-            f"news stories of the week."
-            + f"\nUse pool_max_results={collector_pool_size} as the starting "
-              f"pool size when collecting candidate articles."
-            + "\nThe final newsletter must contain EXACTLY "
-              f"{max_results} curated articles - not more, not fewer."
-            + f"\nNewsletter Title: {newsletter_title}"
-            + country_line
-            + category_line
-        )
+if not keys_ready:
+    st.caption("Enter your Tavily and Gemini API keys in the sidebar to enable generation.")
 
-        raw_code = main_agent(agent, user_query)
-        code = raw_code.replace("```html", "").replace("```", "").strip()
+st.markdown("</div>", unsafe_allow_html=True)
 
-        st.success("Newsletter generated!")
+if clear_clicked:
+    st.session_state.newsletter_html = None
+    st.session_state.generation_seconds = None
+    st.session_state.generated_title = None
+    st.rerun()
 
-        st.download_button(
-            "Download newsletter.html",
-            data=code,
-            file_name="newsletter.html",
-            mime="text/html",
-        )
+if generate_clicked:
+    if not newsletter_title.strip():
+        st.error("Please give your newsletter a title before generating.")
+    elif selected_country == "Custom" and not country_choice.strip():
+        st.error("You selected Custom country — please type a country name.")
+    else:
+        status_box = st.status("Running the newsletter agent...", expanded=True)
+        start_time = time.time()
+        try:
+            status_box.write("🔎 Collecting this week's trending headlines...")
+            status_box.write("🧮 Summarizing and scoring each candidate article...")
+            status_box.write("🎨 Designing the final HTML newsletter layout...")
 
-        st.divider()
-        st.subheader("Preview")
+            agent = build_agent()
+
+            if country_choice:
+                country_line = f"\nCountry: {country_choice} (ONLY use news from this country)."
+            else:
+                country_line = "\nCountry: Any (do not restrict to a single country)."
+
+            if category_choice:
+                category_line = f"\nCategory: {category_choice} (ONLY use news from this category)."
+            else:
+                category_line = "\nCategory: Any (do not restrict to a single category)."
+
+            user_query = (
+                f"Create this week's newsletter covering the top trending "
+                f"news stories of the week."
+                + f"\nUse pool_max_results={collector_pool_size} as the starting "
+                  f"pool size when collecting candidate articles."
+                + "\nThe final newsletter must contain EXACTLY "
+                  f"{max_results} curated articles - not more, not fewer."
+                + f"\nNewsletter Title: {newsletter_title}"
+                + country_line
+                + category_line
+            )
+
+            raw_code = main_agent(agent, user_query)
+            code = raw_code.replace("```html", "").replace("```", "").strip()
+
+            elapsed = round(time.time() - start_time, 1)
+            st.session_state.newsletter_html = code
+            st.session_state.generation_seconds = elapsed
+            st.session_state.generated_title = newsletter_title
+
+            status_box.update(label="Newsletter ready!", state="complete", expanded=False)
+
+        except Exception as exc:
+            status_box.update(label="Generation failed", state="error", expanded=True)
+            st.error(
+                "Something went wrong while generating the newsletter. "
+                "Double-check your API keys and try again.\n\n"
+                f"**Details:** {exc}"
+            )
+
+# =========================================================
+# RESULTS
+# =========================================================
+if st.session_state.newsletter_html:
+    code = st.session_state.newsletter_html
+
+    st.success(f"🎉 \"{st.session_state.generated_title}\" is ready!")
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Articles curated", "5")
+    m2.metric("Generation time", f"{st.session_state.generation_seconds}s")
+    m3.metric("Output size", f"{len(code) // 1024} KB")
+
+    st.download_button(
+        "⬇️ Download newsletter.html",
+        data=code,
+        file_name=f"{st.session_state.generated_title.strip().replace(' ', '_') or 'newsletter'}.html",
+        mime="text/html",
+        use_container_width=True,
+    )
+
+    st.divider()
+
+    tab_preview, tab_source = st.tabs(["👀 Preview", "🧾 HTML Source"])
+    with tab_preview:
         st.components.v1.html(code, height=900, scrolling=True)
+    with tab_source:
+        st.code(code, language="html")
+
+st.markdown(
+    """
+    <div style="text-align:center; color:#8b8ba7; font-size:0.82rem; margin-top:2rem;">
+        Built with a LangChain multi-tool agent · Tavily Search · Google Gemini
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
