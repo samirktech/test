@@ -33,7 +33,7 @@ elif all(all_API):
     st.success("API KEYS LOADED SUCCESSFULLY")
     # =========== MODEL CREATION ==============
     model = ChatGoogleGenerativeAI(
-        model='gemini-3.5-flash-lite',
+        model='gemini-3.5-flash',
         google_api_key=GOOGLE_API_KEY
     )
 else:
