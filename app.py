@@ -153,22 +153,9 @@ with st.sidebar.expander("🔍 Search Settings", expanded=False):
     )
     time_range = st.selectbox("Time range", ["day", "week", "month", "year"], index=1)
     search_depth = st.selectbox("Search depth", ["basic", "advanced"], index=0)
-    include_domains_raw = st.text_input("Only include domains (comma separated)", value="")
-    exclude_domains_raw = st.text_input("Exclude domains (comma separated)", value="")
 
-include_domains, _dropped_include = _clean_domains(include_domains_raw.split(","))
-exclude_domains, _dropped_exclude = _clean_domains(exclude_domains_raw.split(","))
-
-if _dropped_include:
-    st.sidebar.warning(
-        f"Ignored invalid include domain(s): {', '.join(_dropped_include)}. "
-        "Use a real domain like 'bbc.com', not a category name."
-    )
-if _dropped_exclude:
-    st.sidebar.warning(
-        f"Ignored invalid exclude domain(s): {', '.join(_dropped_exclude)}. "
-        "Use a real domain like 'bbc.com', not a category name."
-    )
+include_domains = []
+exclude_domains = []
 
 # =========== STYLE / TONE SETTINGS ==============
 with st.sidebar.expander("🎨 Style Settings", expanded=False):
@@ -179,6 +166,7 @@ with st.sidebar.expander("🎨 Style Settings", expanded=False):
     creativity = st.slider(
         "Model creativity (temperature)", min_value=0.0, max_value=1.0, value=0.4, step=0.1
     )
+    preview_dark_mode = st.checkbox("Preview panel dark background", value=False)
 
 # =========== ARCHIVE / HISTORY ==============
 with st.sidebar.expander(f"🗂️ Archive ({len(st.session_state.history)})", expanded=False):
@@ -615,7 +603,15 @@ if st.session_state.last_html:
 
     st.divider()
     st.subheader("Preview")
-   
+    if preview_dark_mode:
+        st.markdown(
+            '<div style="background:#111;padding:12px;border-radius:8px;">',
+            unsafe_allow_html=True,
+        )
+        st.components.v1.html(code, height=900, scrolling=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+    else:
+        st.components.v1.html(code, height=900, scrolling=True)
 
     if meta["links"]:
         with st.expander("🔗 Sources used in this newsletter"):
