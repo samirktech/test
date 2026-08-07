@@ -33,7 +33,7 @@ elif all(all_API):
     st.success("API KEYS LOADED SUCCESSFULLY")
     # =========== MODEL CREATION ==============
     model = ChatGoogleGenerativeAI(
-        model='gemini-3.5-flash',
+        model='gemini-3.5-flash-lite',
         google_api_key=GOOGLE_API_KEY
     )
 else:
@@ -264,28 +264,18 @@ def main_agent(agent, query):
        week. If a country is given, ONLY include news from that
        country. If a category is given, ONLY include news from that
        category.
-    2. Call the article_summarizer tool separately on EACH candidate
+    2. The final newsletter MUST contain EXACTLY 5 curated articles,
+       never more and never fewer. If the pool returned fewer than 5
+       articles, call weekly_article_collector again with a larger
+       pool_max_results (and, if needed, a broader/looser version of
+       the country or category constraint) until at least 5 usable
+       articles are available.
+    3. Call the article_summarizer tool separately on EACH candidate
        article to get its summary, key points, category and relevance
        score.
-    3. CATEGORY FILTER - if a specific category (not "Any") was given:
-       discard EVERY candidate whose category returned by
-       article_summarizer does not match the given category. Do NOT
-       keep an article from a different category just to reach 5 - a
-       mismatched-category article is never acceptable, no matter how
-       relevant it seems.
-    4. The final newsletter MUST contain EXACTLY 5 curated articles
-       that satisfy the category filter above, never more and never
-       fewer. If, after filtering, fewer than 5 matching articles
-       remain, call weekly_article_collector again with a larger
-       pool_max_results (keeping the SAME category constraint, never
-       loosening or dropping it) to fetch more candidates, summarize
-       the new candidates, and re-apply the category filter. Repeat
-       this until at least 5 category-matching articles are available.
-       Only the country constraint may be broadened if needed - the
-       category constraint must NEVER be relaxed or ignored.
-    5. From the filtered, summarized candidates, keep EXACTLY the best
-       5 curated articles by relevance score.
-    6. Combine those EXACTLY 5 curated summaries (title, summary,
+    4. From the summarized candidates, keep EXACTLY the best 5
+       curated articles by relevance score.
+    5. Combine those EXACTLY 5 curated summaries (title, summary,
        key points, category, url for each) into one collection, then
        call the newsletter_html_generator tool once with that full
        collection so all 5 curated articles appear in the final
@@ -311,12 +301,7 @@ if st.button("Generate Newsletter"):
             country_line = "\nCountry: Any (do not restrict to a single country)."
 
         if category_choice:
-            category_line = (
-                f"\nCategory: {category_choice} (STRICT - every one of the 5 "
-                f"curated articles MUST be from the '{category_choice}' category "
-                "only. Never include an article from any other category, even "
-                "if it means fetching a larger pool to find enough matches.)"
-            )
+            category_line = f"\nCategory: {category_choice} (ONLY use news from this category)."
         else:
             category_line = "\nCategory: Any (do not restrict to a single category)."
 
