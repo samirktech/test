@@ -16,26 +16,8 @@ from tavily import TavilyClient
 # To show web-app: complete page layout
 st.set_page_config(page_title="AI Newsletter Generator", page_icon="📰", layout="wide")
 
-# Domains must look like real domains (something.tld) for the Tavily API to
-# accept them - things like "Government" or "News" are categories, not
-# domains, and get silently dropped rather than crashing the whole run.
-_DOMAIN_RE = re.compile(
-    r"^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$"
-)
-
-
-def _clean_domains(raw_list):
-    """Filter a list of user/agent-supplied strings down to ones that look
-    like valid domains. Returns (valid, dropped)."""
-    valid, dropped = [], []
-    for item in raw_list or []:
-        item = str(item).strip().lower()
-        item = re.sub(r"^https?://", "", item).split("/")[0]  # strip scheme/path if present
-        if item and _DOMAIN_RE.match(item):
-            valid.append(item)
-        elif item:
-            dropped.append(item)
-    return valid, dropped
+# Fixed model temperature (previously controlled by the creativity slider)
+MODEL_TEMPERATURE = 0.4
 
 # ============ SESSION STATE INIT ===================
 if "history" not in st.session_state:
@@ -153,22 +135,6 @@ with st.sidebar.expander("🔍 Search Settings", expanded=False):
     )
     time_range = st.selectbox("Time range", ["day", "week", "month", "year"], index=1)
     search_depth = st.selectbox("Search depth", ["basic", "advanced"], index=0)
-    include_domains_raw = st.text_input("Only include domains (comma separated)", value="")
-    exclude_domains_raw = st.text_input("Exclude domains (comma separated)", value="")
-
-include_domains, _dropped_include = _clean_domains(include_domains_raw.split(","))
-exclude_domains, _dropped_exclude = _clean_domains(exclude_domains_raw.split(","))
-
-if _dropped_include:
-    st.sidebar.warning(
-        f"Ignored invalid include domain(s): {', '.join(_dropped_include)}. "
-        "Use a real domain like 'bbc.com', not a category name."
-    )
-if _dropped_exclude:
-    st.sidebar.warning(
-        f"Ignored invalid exclude domain(s): {', '.join(_dropped_exclude)}. "
-        "Use a real domain like 'bbc.com', not a category name."
-    )
 
 # =========== STYLE / TONE SETTINGS ==============
 with st.sidebar.expander("🎨 Style Settings", expanded=False):
@@ -176,10 +142,6 @@ with st.sidebar.expander("🎨 Style Settings", expanded=False):
         "Writing tone", ["Professional", "Casual", "Playful", "Formal", "Enthusiastic"], index=0
     )
     accent_color = st.color_picker("Accent / highlight color", value="#1a73e8")
-    creativity = st.slider(
-        "Model creativity (temperature)", min_value=0.0, max_value=1.0, value=0.4, step=0.1
-    )
-    preview_dark_mode = st.checkbox("Preview panel dark background", value=False)
 
 # =========== ARCHIVE / HISTORY ==============
 with st.sidebar.expander(f"🗂️ Archive ({len(st.session_state.history)})", expanded=False):
@@ -210,15 +172,13 @@ def weekly_article_collector(
     keywords: Optional[str] = None,
     time_range: str = "week",
     search_depth: str = "basic",
-    include_domains: Optional[list] = None,
-    exclude_domains: Optional[list] = None,
 ):
     """This function searches the web for the top trending news
     headlines published recently using the Tavily search API.
     Optionally restricts results to a specific country and/or
     category, nudges the query toward extra keywords/topics, and
-    supports a configurable time_range (day/week/month/year),
-    search_depth (basic/advanced), and include/exclude domain lists.
+    supports a configurable time_range (day/week/month/year) and
+    search_depth (basic/advanced).
     Returns article metadata: title, url, content and published date."""
 
     query_parts = ["top trending"]
@@ -232,12 +192,6 @@ def weekly_article_collector(
     query_parts.append(f"this {time_range}")
     query = " ".join(query_parts)
 
-    # Defensive cleanup: the agent sometimes passes category/keyword-like
-    # strings (e.g. "Government") instead of real domains. Silently drop
-    # anything that isn't a valid domain rather than letting the API call fail.
-    include_domains, _ = _clean_domains(include_domains)
-    exclude_domains, _ = _clean_domains(exclude_domains)
-
     client = TavilyClient(api_key=TAVILY_API_KEY)
     search_kwargs = dict(
         query=query,
@@ -247,10 +201,6 @@ def weekly_article_collector(
         include_answer=False,
         search_depth=search_depth,
     )
-    if include_domains:
-        search_kwargs["include_domains"] = include_domains
-    if exclude_domains:
-        search_kwargs["exclude_domains"] = exclude_domains
 
     response = client.search(**search_kwargs)
 
@@ -332,6 +282,10 @@ def newsletter_html_generator(
     Do NOT include any <img> tags, background-image styles, or image
     urls anywhere in the output - text and colored boxes only, no photos.
 
+    Do NOT display any article category label or category name anywhere
+    in the newsletter (not in headings, accent lines, info boxes, or
+    elsewhere).
+
     Follow this exact structure and style:
     - Top-left corner: a small bordered box showing the exact text
       "{current_date}" as the generation/publish date.
@@ -349,9 +303,9 @@ def newsletter_html_generator(
       row-gap around 24px) to lay out one section per curated article.
       Do NOT create a single "top story" block - turn every curated
       article into its own section: a bold uppercase heading (short,
-      based on the article's own title/category) followed by a
+      based on the article's own title) followed by a
       paragraph using that article's summary and key points as body
-      text, spanning whatever categories the curated summaries
+      text, spanning whatever topics the curated summaries
       actually cover (world news, tech, business, science, etc).
     - CRITICAL - there will always be EXACTLY 5 curated articles below.
       Render EXACTLY 5 sections in the grid, one per article - never
@@ -363,13 +317,13 @@ def newsletter_html_generator(
       curated summaries.
     - For 2-3 of the sections, add a short colored accent line
       (in a highlight color) above the paragraph showing that article's
-      own category or relevance score.
+      own relevance score.
     - At the bottom of each column, add one pale colored info box
-      (light blue/light pink) containing that source article's category
-      and a bold "Read More" link pointing to the real article url -
-      only add this info box if there is a real article category and
-      url to put inside it, never as an empty filler box.
-      Use the real curated article titles, summaries, categories and
+      (light blue/light pink) containing a bold "Read More" link
+      pointing to the real article url -
+      only add this info box if there is a real url to put inside it,
+      never as an empty filler box.
+      Use the real curated article titles, summaries and
       urls throughout - never placeholder/lorem ipsum text.
     - Footer: a full-width colored strip at the very bottom with small
       bold centered white text reading something like "Compiled
@@ -429,7 +383,7 @@ def _reading_time_minutes(word_count, wpm=200):
 max_results = 5  # newsletter template always renders exactly 5 curated sections
 
 if all(all_API):
-    model = get_model(GOOGLE_API_KEY, creativity)
+    model = get_model(GOOGLE_API_KEY, MODEL_TEMPERATURE)
 
     # ========== Agent Creation ================
     agent = create_agent(
@@ -446,16 +400,11 @@ def main_agent(agent, query):
     prompt = """Your task is to orchestrate the full newsletter workflow
     based on the instructions given below:
     1. Call the weekly_article_collector tool with the pool_max_results
-       given, and with the country, category, keywords, time_range,
-       search_depth, include_domains and exclude_domains as given (if
-       any), to fetch a pool of candidate top trending news headlines.
+       given, and with the country, category, keywords, time_range
+       and search_depth as given (if any), to fetch a pool of
+       candidate top trending news headlines.
        If a country is given, ONLY include news from that country. If a
        category is given, ONLY include news from that category.
-       IMPORTANT: include_domains and exclude_domains must ONLY ever
-       contain real website domains (e.g. "bbc.com", "reuters.com").
-       NEVER put a category name, keyword, or topic (e.g. "Government",
-       "Tech") into include_domains or exclude_domains - if no real
-       domains were given, leave those lists empty.
     2. The final newsletter MUST contain EXACTLY 5 curated articles,
        never more and never fewer. If the pool returned fewer than 5
        articles, call weekly_article_collector again with a larger
@@ -504,11 +453,6 @@ if generate_clicked or regenerate_clicked:
         category_line = "\nCategory: Any (do not restrict to a single category)."
 
     keywords_line = f"\nExtra keywords/topics to favor: {custom_keywords}." if custom_keywords else ""
-    domains_line = ""
-    if include_domains:
-        domains_line += f"\nOnly include these domains: {', '.join(include_domains)}."
-    if exclude_domains:
-        domains_line += f"\nExclude these domains: {', '.join(exclude_domains)}."
 
     style_notes = (
         f"Write in {output_language}. Use a {tone_choice.lower()} tone throughout. "
@@ -528,7 +472,6 @@ if generate_clicked or regenerate_clicked:
         + country_line
         + category_line
         + keywords_line
-        + domains_line
         + f"\nStyle notes (do not change structure, only flavor): {style_notes}"
     )
 
@@ -616,15 +559,7 @@ if st.session_state.last_html:
 
     st.divider()
     st.subheader("Preview")
-    if preview_dark_mode:
-        st.markdown(
-            '<div style="background:#111;padding:12px;border-radius:8px;">',
-            unsafe_allow_html=True,
-        )
-        st.components.v1.html(code, height=900, scrolling=True)
-        st.markdown("</div>", unsafe_allow_html=True)
-    else:
-        st.components.v1.html(code, height=900, scrolling=True)
+    st.components.v1.html(code, height=900, scrolling=True)
 
     if meta["links"]:
         with st.expander("🔗 Sources used in this newsletter"):
