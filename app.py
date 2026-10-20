@@ -19,13 +19,8 @@ st.set_page_config(page_title="AI Newsletter Generator", page_icon="📰", layou
 # Fixed model temperature (previously controlled by the creativity slider)
 MODEL_TEMPERATURE = 0.4
 
-# What the summarizer scores relevance against. Updated on every generation
-# from the selected country / category / keywords (see generate block below).
 relevance_focus = "top trending news"
 
-# Writing tone and style notes (language, tone, accent color). Updated on every
-# generation and read directly by the tools, so they never depend on the agent
-# remembering to pass them.
 writing_tone = "Professional"
 current_style_notes = ""
 
