@@ -19,8 +19,13 @@ st.set_page_config(page_title="AI Newsletter Generator", page_icon="📰", layou
 # Fixed model temperature (previously controlled by the creativity slider)
 MODEL_TEMPERATURE = 0.4
 
+# What the summarizer scores relevance against. Updated on every generation
+# from the selected country / category / keywords (see generate block below).
 relevance_focus = "top trending news"
 
+# Writing tone and style notes (language, tone, accent color). Updated on every
+# generation and read directly by the tools, so they never depend on the agent
+# remembering to pass them.
 writing_tone = "Professional"
 current_style_notes = ""
 
@@ -38,7 +43,7 @@ st.title("AI NEWSLETTER GENERATOR")
 st.write("""This app helps you build a curated, styled HTML newsletter
 from this week's top trending news using a LangChain agent.""")
 
-st.sidebar.title("Fill Important Details")
+st.sidebar.title("Settings")
 
 # ============ API KEYS ===================
 with st.sidebar.expander("🔑 API Keys", expanded=True):
@@ -465,13 +470,9 @@ def main_agent(agent, query):
 
 
 # ========== CALLING MAIN AGENT ===============
-gen_col, regen_col = st.columns([1, 1])
-generate_clicked = gen_col.button("Generate Newsletter", type="primary")
-regenerate_clicked = regen_col.button(
-    "Regenerate with same settings", disabled=st.session_state.last_meta is None
-)
+generate_clicked = st.button("Generate Newsletter", type="primary")
 
-if generate_clicked or regenerate_clicked:
+if generate_clicked:
     if country_choice:
         country_line = f"\nCountry: {country_choice} (ONLY use news from this country)."
     else:
