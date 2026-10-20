@@ -49,10 +49,6 @@ with st.sidebar.expander("🔑 API Keys", expanded=True):
         type="password",
         value=st.secrets.get("GOOGLE_API_KEY", "") if hasattr(st, "secrets") else "",
     )
-    remember_keys = st.checkbox(
-        "Remember keys for this session", value=True,
-        help="Keeps keys in session state so you don't have to re-enter them while you tweak settings.",
-    )
 
 all_API = [TAVILY_API_KEY, GOOGLE_API_KEY]
 
@@ -371,9 +367,22 @@ def _strip_html_to_text(html):
     return text.strip()
 
 
-def _extract_links(html):
-    """Pull out (text, href) pairs for a quick source list under the preview."""
-    return re.findall(r'<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>', html, flags=re.IGNORECASE | re.DOTALL)
+def _open_links_in_new_tab(html):
+    """Make every link open in a new browser tab. Inside the Streamlit preview
+    iframe, a normal link loads inside the iframe, and many sites (e.g.
+    reuters.com) refuse to be framed, which shows 'refused to connect'."""
+    def _fix(match):
+        attrs = match.group(1)
+        attrs = re.sub(r'\s+target\s*=\s*("[^"]*"|\'[^\']*\'|\S+)', "", attrs, flags=re.IGNORECASE)
+        attrs = re.sub(r'\s+rel\s*=\s*("[^"]*"|\'[^\']*\'|\S+)', "", attrs, flags=re.IGNORECASE)
+        return f'<a{attrs} target="_blank" rel="noopener noreferrer">'
+
+    html = re.sub(r"<a\b([^>]*)>", _fix, html, flags=re.IGNORECASE)
+    if re.search(r"<head[^>]*>", html, flags=re.IGNORECASE):
+        html = re.sub(
+            r"(<head[^>]*>)", r'\1<base target="_blank">', html, count=1, flags=re.IGNORECASE
+        )
+    return html
 
 
 def _reading_time_minutes(word_count, wpm=200):
@@ -482,6 +491,7 @@ if generate_clicked or regenerate_clicked:
         status_box.write("🖋️ Drafting the styled HTML newsletter...")
         raw_code = main_agent(agent, user_query)
         code = raw_code.replace("```html", "").replace("```", "").strip()
+        code = _open_links_in_new_tab(code)
         status_box.update(label="Newsletter generated!", state="complete", expanded=False)
     except Exception as e:
         status_box.update(label="Generation failed", state="error", expanded=True)
@@ -491,7 +501,6 @@ if generate_clicked or regenerate_clicked:
     plain_text = _strip_html_to_text(code)
     word_count = len(plain_text.split())
     reading_time = _reading_time_minutes(word_count)
-    links = _extract_links(code)
 
     entry_id = str(uuid.uuid4())
     meta = {
@@ -501,7 +510,6 @@ if generate_clicked or regenerate_clicked:
         "tone": tone_choice,
         "word_count": word_count,
         "reading_time": reading_time,
-        "links": links,
     }
     st.session_state.last_html = code
     st.session_state.last_meta = meta
@@ -560,9 +568,3 @@ if st.session_state.last_html:
     st.divider()
     st.subheader("Preview")
     st.components.v1.html(code, height=900, scrolling=True)
-
-    if meta["links"]:
-        with st.expander("🔗 Sources used in this newsletter"):
-            for href, text in meta["links"]:
-                clean_text = re.sub(r"<[^>]+>", "", text).strip() or href
-                st.markdown(f"- [{clean_text}]({href})")
