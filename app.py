@@ -19,11 +19,18 @@ st.set_page_config(page_title="AI Newsletter Generator", page_icon="📰", layou
 # Fixed model temperature (previously controlled by the creativity slider)
 MODEL_TEMPERATURE = 0.4
 
+
 relevance_focus = "top trending news"
 
 writing_tone = "Professional"
 current_style_notes = ""
 output_lang = "English"
+
+# Search settings. Updated on every generation and read directly by the
+# search tool, so they always apply (the agent cannot forget or change them).
+current_pool_size = 10
+current_time_range = "week"
+current_search_depth = "basic"
 
 # ============ SESSION STATE INIT ===================
 if "history" not in st.session_state:
@@ -128,7 +135,7 @@ custom_keywords = st.text_input(
 # =========== ADVANCED SEARCH SETTINGS ==============
 with st.sidebar.expander("🔍 Search Settings", expanded=False):
     collector_pool_size = st.slider(
-        "Candidate pool size", min_value=5, max_value=30, value=10,
+        "Candidate pool size", min_value=5, max_value=20, value=10,
         help="How many candidate articles to fetch before narrowing down to the final 5.",
     )
     time_range = st.selectbox("Time range", ["day", "week", "month", "year"], index=1)
@@ -164,22 +171,22 @@ with st.sidebar.expander(f"🗂️ Archive ({len(st.session_state.history)})", e
 
 # =========== TOOL 1 ======================
 def weekly_article_collector(
-    max_results: int = 5,
     country: Optional[str] = None,
     category: Optional[str] = None,
     keywords: Optional[str] = None,
-    time_range: str = "week",
-    search_depth: str = "basic",
 ):
     """This function searches the web for the top trending news
     headlines published recently using the Tavily search API.
     Optionally restricts results to a specific country and/or
     category (when category is "World" and a country is given, it
     searches for news between that country and other countries in any
-    sector), nudges the query toward extra keywords/topics, and
-    supports a configurable time_range (day/week/month/year) and
-    search_depth (basic/advanced).
+    sector) and nudges the query toward extra keywords/topics.
+    The pool size, time range and search depth are applied automatically.
     Returns article metadata: title, url, content and published date."""
+
+    max_results = current_pool_size
+    time_range = current_time_range
+    search_depth = current_search_depth
 
     if category and category.strip().lower() == "world" and country:
         # World + country: news between the selected country and other
@@ -441,10 +448,10 @@ def main_agent(agent, query):
 
     prompt = """Your task is to orchestrate the full newsletter workflow
     based on the instructions given below:
-    1. Call the weekly_article_collector tool with the pool_max_results
-       given, and with the country, category, keywords, time_range
-       and search_depth as given (if any), to fetch a pool of
-       candidate top trending news headlines.
+    1. Call the weekly_article_collector tool with the country,
+       category and keywords as given (if any) - the pool size, time
+       range and search depth are applied automatically - to fetch a
+       pool of candidate top trending news headlines.
        If a country is given, ONLY include news from that country. If a
        category is given, ONLY include news from that category.
        EXCEPTION: if the category is World and a country is given,
@@ -454,10 +461,9 @@ def main_agent(agent, query):
        fine.
     2. The final newsletter MUST contain EXACTLY 5 curated articles,
        never more and never fewer. If the pool returned fewer than 5
-       articles, call weekly_article_collector again with a larger
-       pool_max_results (and, if needed, a broader/looser version of
-       the country or category constraint) until at least 5 usable
-       articles are available.
+       articles, call weekly_article_collector again with a
+       broader/looser version of the country or category constraint
+       until at least 5 usable articles are available.
     3. Call the article_summarizer tool separately on EACH candidate
        article to get its summary, key points, category and relevance
        score (the writing tone is applied automatically).
@@ -476,7 +482,10 @@ def main_agent(agent, query):
 
     prompt = prompt + query
 
-    response = agent.invoke({"messages": [{'role': 'user', 'content': prompt}]})
+    response = agent.invoke(
+        {"messages": [{'role': 'user', 'content': prompt}]},
+        config={"recursion_limit": 100},
+    )
     code = _extract_text(response['messages'][-1])
     return code
 
@@ -520,13 +529,13 @@ if generate_clicked:
     writing_tone = tone_choice
     current_style_notes = style_notes
     output_lang = output_language
+    current_pool_size = collector_pool_size
+    current_time_range = time_range
+    current_search_depth = search_depth
 
     user_query = (
         f"Create this week's newsletter covering the top trending "
         f"news stories of the week."
-        + f"\nUse pool_max_results={collector_pool_size} as the starting "
-          f"pool size when collecting candidate articles."
-        + f"\nUse time_range={time_range} and search_depth={search_depth}."
         + "\nThe final newsletter must contain EXACTLY "
           f"{max_results} curated articles - not more, not fewer."
         + f"\nNewsletter Title: {newsletter_title}"
