@@ -23,6 +23,7 @@ relevance_focus = "top trending news"
 
 writing_tone = "Professional"
 current_style_notes = ""
+output_lang = "English"
 
 # ============ SESSION STATE INIT ===================
 if "history" not in st.session_state:
@@ -268,6 +269,7 @@ def newsletter_html_generator(
     tone, accent color) are applied automatically."""
 
     style_notes = current_style_notes
+    text_dir = "rtl" if output_lang == "Arabic" else "ltr"
 
     current_date = datetime.datetime.now().strftime("%d %B %Y")
 
@@ -296,6 +298,19 @@ def newsletter_html_generator(
     Do NOT include any <img> tags, background-image styles, or image
     urls anywhere in the output - text and colored boxes only, no photos.
 
+    LANGUAGE - the selected output language is {output_lang}:
+    - EVERY visible word in the newsletter MUST be written in
+      {output_lang}: article headings, summaries, key points, the
+      tagline, the "Read More" button text, the date, and the footer
+      text. Translate article titles/headings into {output_lang} too.
+      Do not leave any English text anywhere (except as noted below).
+    - ONLY EXCEPTION: the newsletter title "{newsletter_title}" must be
+      shown exactly as given - do NOT translate, transliterate or alter it.
+    - Write the date in {output_lang} as well (translate the month name
+      and use the natural date order for that language).
+    - Set <html lang> for {output_lang} and set dir="{text_dir}" on the
+      <html> tag.
+
     Do NOT display any article category label or category name anywhere
     in the newsletter (not in headings, accent lines, info boxes, or
     elsewhere). Likewise, do NOT display any relevance score or rating
@@ -303,8 +318,9 @@ def newsletter_html_generator(
     ranking only.
 
     Follow this exact structure and style:
-    - Top-left corner: a small bordered box showing the exact text
-      "{current_date}" as the generation/publish date.
+    - Top-left corner: a small bordered box showing the date
+      "{current_date}" (written in {output_lang}) as the
+      generation/publish date.
     - Masthead: one huge bold centered title showing
       "{newsletter_title}" (60-90px, wide letter-spacing, like a
       newspaper nameplate).
@@ -339,8 +355,9 @@ def newsletter_html_generator(
       Use the real curated article titles, summaries and
       urls throughout - never placeholder/lorem ipsum text.
     - Footer: a full-width colored strip at the very bottom with small
-      bold centered white text reading exactly "Generated on
-      {current_date}" and nothing else (no other words, no pipeline or
+      bold centered white text meaning exactly "Generated on
+      {current_date}" translated into {output_lang} (date written in
+      {output_lang}) and nothing else (no other words, no pipeline or
       AI mentions).
     Give final response strictly in HTML only, no markdown, no code fences.
 
@@ -502,6 +519,7 @@ if generate_clicked:
 
     writing_tone = tone_choice
     current_style_notes = style_notes
+    output_lang = output_language
 
     user_query = (
         f"Create this week's newsletter covering the top trending "
