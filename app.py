@@ -19,6 +19,10 @@ st.set_page_config(page_title="AI Newsletter Generator", page_icon="📰", layou
 # Fixed model temperature (previously controlled by the creativity slider)
 MODEL_TEMPERATURE = 0.4
 
+# What the summarizer scores relevance against. Updated on every generation
+# from the selected country / category / keywords (see generate block below).
+relevance_focus = "top trending news"
+
 # ============ SESSION STATE INIT ===================
 if "history" not in st.session_state:
     st.session_state.history = []  # list of dicts: id, timestamp, title, html, meta
@@ -170,21 +174,35 @@ def weekly_article_collector(
     """This function searches the web for the top trending news
     headlines published recently using the Tavily search API.
     Optionally restricts results to a specific country and/or
-    category, nudges the query toward extra keywords/topics, and
+    category (when category is "World" and a country is given, it
+    searches for news between that country and other countries in any
+    sector), nudges the query toward extra keywords/topics, and
     supports a configurable time_range (day/week/month/year) and
     search_depth (basic/advanced).
     Returns article metadata: title, url, content and published date."""
 
-    query_parts = ["top trending"]
-    if category:
-        query_parts.append(f"{category}")
-    query_parts.append("news headlines")
-    if keywords:
-        query_parts.append(f"about {keywords}")
-    if country:
-        query_parts.append(f"in {country}")
-    query_parts.append(f"this {time_range}")
-    query = " ".join(query_parts)
+    if category and category.strip().lower() == "world" and country:
+        # World + country: news between the selected country and other
+        # countries, across any sector.
+        query_parts = [
+            f"{country} relations with other countries news",
+            "(diplomacy, trade, economy, defense, technology, agreements, disputes)",
+        ]
+        if keywords:
+            query_parts.append(f"about {keywords}")
+        query_parts.append(f"this {time_range}")
+        query = " ".join(query_parts)
+    else:
+        query_parts = ["top trending"]
+        if category:
+            query_parts.append(f"{category}")
+        query_parts.append("news headlines")
+        if keywords:
+            query_parts.append(f"about {keywords}")
+        if country:
+            query_parts.append(f"in {country}")
+        query_parts.append(f"this {time_range}")
+        query = " ".join(query_parts)
 
     client = TavilyClient(api_key=TAVILY_API_KEY)
     search_kwargs = dict(
@@ -213,14 +231,17 @@ def weekly_article_collector(
 def article_summarizer(article_text, article_title="Untitled", tone="Professional"):
     """This function takes article text or url content and
     produces a concise summary, key points, category
-    and relevance score (out of 10) using LLM,
-    given article title, content, and a desired writing tone."""
+    and relevance score (out of 10) using LLM, given article title,
+    content, and a desired writing tone. Relevance is scored against the
+    user's selected country/category focus."""
 
     prompt = f"""You are a professional newsletter editor writing in a {tone.lower()} tone.
     Summarize the article below in 3-4 concise lines,
     then list 2-3 key points as bullets, assign a single
     category (Tech/Business/Science/World/Other) and give
-    a relevance score out of 10 for a general tech audience.
+    a relevance score out of 10 for how well the article matches
+    this focus: {relevance_focus}. Score ONLY on how well it matches
+    that focus, not on how interesting it is for any particular industry.
 
     Article Title: {article_title}
     Article Content: {article_text}
@@ -278,7 +299,9 @@ def newsletter_html_generator(
 
     Do NOT display any article category label or category name anywhere
     in the newsletter (not in headings, accent lines, info boxes, or
-    elsewhere).
+    elsewhere). Likewise, do NOT display any relevance score or rating
+    (e.g. "8/10") anywhere in the newsletter - it is for internal
+    ranking only.
 
     Follow this exact structure and style:
     - Top-left corner: a small bordered box showing the exact text
@@ -309,9 +332,6 @@ def newsletter_html_generator(
       <div>, or a solid-colored block with no text in it anywhere on
       the page - every colored box must contain real content from the
       curated summaries.
-    - For 2-3 of the sections, add a short colored accent line
-      (in a highlight color) above the paragraph showing that article's
-      own relevance score.
     - At the bottom of each column, add one pale colored info box
       (light blue/light pink) containing a bold "Read More" link
       pointing to the real article url -
@@ -320,9 +340,9 @@ def newsletter_html_generator(
       Use the real curated article titles, summaries and
       urls throughout - never placeholder/lorem ipsum text.
     - Footer: a full-width colored strip at the very bottom with small
-      bold centered white text reading something like "Compiled
-      automatically by a multi-agent AI pipeline | Generated on
-      {current_date}".
+      bold centered white text reading exactly "Generated on
+      {current_date}" and nothing else (no other words, no pipeline or
+      AI mentions).
     Give final response strictly in HTML only, no markdown, no code fences.
 
     Newsletter Title: {newsletter_title}
@@ -412,6 +432,11 @@ def main_agent(agent, query):
        candidate top trending news headlines.
        If a country is given, ONLY include news from that country. If a
        category is given, ONLY include news from that category.
+       EXCEPTION: if the category is World and a country is given,
+       ONLY include news that involves BOTH that country and at least
+       one other country (e.g. diplomacy, trade, defense, technology,
+       economy, agreements or disputes between them) - any sector is
+       fine.
     2. The final newsletter MUST contain EXACTLY 5 curated articles,
        never more and never fewer. If the pool returned fewer than 5
        articles, call weekly_article_collector again with a larger
@@ -454,12 +479,32 @@ if generate_clicked or regenerate_clicked:
     else:
         country_line = "\nCountry: Any (do not restrict to a single country)."
 
-    if category_choice:
+    if category_choice == "World" and country_choice:
+        category_line = (
+            f"\nCategory: World (ONLY use news between {country_choice} and "
+            f"other countries, in any sector such as politics, trade, defense, "
+            f"technology or economy)."
+        )
+    elif category_choice:
         category_line = f"\nCategory: {category_choice} (ONLY use news from this category)."
     else:
         category_line = "\nCategory: Any (do not restrict to a single category)."
 
     keywords_line = f"\nExtra keywords/topics to favor: {custom_keywords}." if custom_keywords else ""
+
+    # Relevance is scored against what the user selected (used by article_summarizer)
+    if category_choice == "World" and country_choice:
+        relevance_focus = f"news between {country_choice} and other countries (any sector)"
+    elif category_choice and country_choice:
+        relevance_focus = f"{category_choice} news in {country_choice}"
+    elif category_choice:
+        relevance_focus = f"{category_choice} news"
+    elif country_choice:
+        relevance_focus = f"news in {country_choice}"
+    else:
+        relevance_focus = "top trending news"
+    if custom_keywords:
+        relevance_focus += f", especially about {custom_keywords}"
 
     style_notes = (
         f"Write in {output_language}. Use a {tone_choice.lower()} tone throughout. "
