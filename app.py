@@ -26,8 +26,6 @@ if "last_html" not in st.session_state:
     st.session_state.last_html = None
 if "last_meta" not in st.session_state:
     st.session_state.last_meta = None
-if "feedback" not in st.session_state:
-    st.session_state.feedback = {}  # newsletter_id -> "up"/"down"
 
 # To give title
 st.title("AI NEWSLETTER GENERATOR")
@@ -553,17 +551,6 @@ if st.session_state.last_html:
     with dl_col3:
         with st.popover("📋 Copy HTML"):
             st.code(code, language="html")
-
-    up_col, down_col, _ = st.columns([1, 1, 6])
-    current_id = st.session_state.history[-1]["id"] if st.session_state.history else None
-    if current_id:
-        if up_col.button("👍", key=f"up_{current_id}"):
-            st.session_state.feedback[current_id] = "up"
-        if down_col.button("👎", key=f"down_{current_id}"):
-            st.session_state.feedback[current_id] = "down"
-        fb = st.session_state.feedback.get(current_id)
-        if fb:
-            st.caption(f"Thanks for the feedback ({'👍' if fb == 'up' else '👎'})!")
 
     st.divider()
     st.subheader("Preview")
