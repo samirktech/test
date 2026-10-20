@@ -41,7 +41,7 @@ if "last_meta" not in st.session_state:
     st.session_state.last_meta = None
 
 # To give title
-st.title("AI NEWSLETTER GENERATOR")
+st.title("AI NEWSLETTER GENERATOR", anchor=False)
 
 st.write("""This app helps you build a curated, styled HTML newsletter
 from this week's top trending news using a LangChain agent.""")
@@ -81,7 +81,7 @@ def get_model(api_key, temperature):
 
 
 # ==================GET USER INFO=====================
-st.markdown("### NEWSLETTER DETAILS")
+st.markdown("### NEWSLETTER DETAILS", anchor=False)
 col_title, col_lang = st.columns([2, 1])
 with col_title:
     newsletter_title = st.text_input("Newsletter Title", value="Weekly Digest")
