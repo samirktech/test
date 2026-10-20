@@ -19,9 +19,10 @@ st.set_page_config(page_title="AI Newsletter Generator", page_icon="📰", layou
 # Fixed model temperature (previously controlled by the creativity slider)
 MODEL_TEMPERATURE = 0.4
 
-# What the summarizer scores relevance against. Updated on every generation
-# from the selected country / category / keywords (see generate block below).
 relevance_focus = "top trending news"
+
+writing_tone = "Professional"
+current_style_notes = ""
 
 # ============ SESSION STATE INIT ===================
 if "history" not in st.session_state:
@@ -57,19 +58,19 @@ all_API = [TAVILY_API_KEY, GOOGLE_API_KEY]
 if not all(all_API):
     st.error("Must give API keys")
     st.stop()
-elif all(all_API):
-    st.sidebar.success("API KEYS LOADED SUCCESSFULLY")
 
-    # =========== MODEL CREATION ==============
-    @st.cache_resource(show_spinner=False)
-    def get_model(api_key, temperature):
-        return ChatGoogleGenerativeAI(
-            model='gemini-3.5-flash-lite',
-            google_api_key=api_key,
-            temperature=temperature,
-        )
-else:
-    st.info("PASS ALL API-KEYS")
+st.sidebar.success("API KEYS LOADED SUCCESSFULLY")
+
+
+# =========== MODEL CREATION ==============
+@st.cache_resource(show_spinner=False)
+def get_model(api_key, temperature):
+    return ChatGoogleGenerativeAI(
+        model='gemini-3.5-flash-lite',
+        google_api_key=api_key,
+        temperature=temperature,
+    )
+
 
 # ==================GET USER INFO=====================
 st.markdown("### NEWSLETTER DETAILS")
@@ -102,8 +103,6 @@ with col_country:
 
     if selected_country == "Custom":
         country_choice = st.text_input("Enter Country", value="")
-    elif selected_country == "Any":
-        country_choice = None
     else:
         country_choice = selected_country
 
@@ -116,7 +115,7 @@ category_options = [
 ]
 with col_category:
     selected_category = st.selectbox("Category", category_options, index=0)
-    category_choice = None if selected_category == "Any" else selected_category
+    category_choice = selected_category
 
 # =========== KEYWORD / TOPIC FOCUS ==============
 custom_keywords = st.text_input(
@@ -228,14 +227,14 @@ def weekly_article_collector(
 
 
 # =========== TOOL 2 ======================
-def article_summarizer(article_text, article_title="Untitled", tone="Professional"):
+def article_summarizer(article_text, article_title="Untitled"):
     """This function takes article text or url content and
     produces a concise summary, key points, category
-    and relevance score (out of 10) using LLM, given article title,
-    content, and a desired writing tone. Relevance is scored against the
-    user's selected country/category focus."""
+    and relevance score (out of 10) using LLM, given article title
+    and content. The writing tone and the relevance focus (selected
+    country/category) are applied automatically."""
 
-    prompt = f"""You are a professional newsletter editor writing in a {tone.lower()} tone.
+    prompt = f"""You are a professional newsletter editor writing in a {writing_tone.lower()} tone.
     Summarize the article below in 3-4 concise lines,
     then list 2-3 key points as bullets, assign a single
     category (Tech/Business/Science/World/Other) and give
@@ -261,14 +260,14 @@ def article_summarizer(article_text, article_title="Untitled", tone="Professiona
 def newsletter_html_generator(
     curated_summaries,
     newsletter_title="Weekly Newsletter",
-    style_notes: str = "",
 ):
     """This function converts curated article summaries
     into a styled html newsletter template suitable
     for email or web publishing, given curated summaries
-    text, newsletter title, and optional style_notes (language,
-    tone, accent color) that only affect visual/language flavor,
-    never the required structure."""
+    text and newsletter title. Style preferences (language,
+    tone, accent color) are applied automatically."""
+
+    style_notes = current_style_notes
 
     current_date = datetime.datetime.now().strftime("%d %B %Y")
 
@@ -409,14 +408,13 @@ def _reading_time_minutes(word_count, wpm=200):
 
 max_results = 5  # newsletter template always renders exactly 5 curated sections
 
-if all(all_API):
-    model = get_model(GOOGLE_API_KEY, MODEL_TEMPERATURE)
+model = get_model(GOOGLE_API_KEY, MODEL_TEMPERATURE)
 
-    # ========== Agent Creation ================
-    agent = create_agent(
-        model=model,
-        tools=[weekly_article_collector, article_summarizer, newsletter_html_generator]
-    )
+# ========== Agent Creation ================
+agent = create_agent(
+    model=model,
+    tools=[weekly_article_collector, article_summarizer, newsletter_html_generator]
+)
 
 
 # ============== MAIN AGENT ===============
@@ -445,15 +443,15 @@ def main_agent(agent, query):
        articles are available.
     3. Call the article_summarizer tool separately on EACH candidate
        article to get its summary, key points, category and relevance
-       score, using the requested writing tone.
+       score (the writing tone is applied automatically).
     4. From the summarized candidates, keep EXACTLY the best 5
        curated articles by relevance score.
     5. Combine those EXACTLY 5 curated summaries (title, summary,
        key points, category, url for each) into one collection, then
        call the newsletter_html_generator tool once with that full
-       collection, the newsletter title, and any style_notes (language,
-       tone, accent color) so all 5 curated articles appear in the
-       final newsletter.
+       collection and the newsletter title (language, tone and accent
+       color are applied automatically) so all 5 curated articles
+       appear in the final newsletter.
     Give the final response output strictly in HTML, no markdowns,
     no code fences, no explanation text before or after the HTML.
     Instructions given below:
@@ -485,10 +483,8 @@ if generate_clicked or regenerate_clicked:
             f"other countries, in any sector such as politics, trade, defense, "
             f"technology or economy)."
         )
-    elif category_choice:
-        category_line = f"\nCategory: {category_choice} (ONLY use news from this category)."
     else:
-        category_line = "\nCategory: Any (do not restrict to a single category)."
+        category_line = f"\nCategory: {category_choice} (ONLY use news from this category)."
 
     keywords_line = f"\nExtra keywords/topics to favor: {custom_keywords}." if custom_keywords else ""
 
@@ -497,12 +493,8 @@ if generate_clicked or regenerate_clicked:
         relevance_focus = f"news between {country_choice} and other countries (any sector)"
     elif category_choice and country_choice:
         relevance_focus = f"{category_choice} news in {country_choice}"
-    elif category_choice:
-        relevance_focus = f"{category_choice} news"
-    elif country_choice:
-        relevance_focus = f"news in {country_choice}"
     else:
-        relevance_focus = "top trending news"
+        relevance_focus = f"{category_choice} news"
     if custom_keywords:
         relevance_focus += f", especially about {custom_keywords}"
 
@@ -511,6 +503,9 @@ if generate_clicked or regenerate_clicked:
         f"Use {accent_color} as the primary accent/highlight color for banners, "
         f"accent lines and info boxes wherever a color choice is needed."
     )
+
+    writing_tone = tone_choice
+    current_style_notes = style_notes
 
     user_query = (
         f"Create this week's newsletter covering the top trending "
@@ -548,9 +543,7 @@ if generate_clicked or regenerate_clicked:
     entry_id = str(uuid.uuid4())
     meta = {
         "country": country_choice or "Any",
-        "category": category_choice or "Any",
-        "language": output_language,
-        "tone": tone_choice,
+        "category": category_choice,
         "word_count": word_count,
         "reading_time": reading_time,
     }
